@@ -167,7 +167,7 @@ public class WhisperingDarkMod {
             rThigh.addOrReplaceChild("right_shin", CubeListBuilder.create().texOffs(0, 31).addBox(-1.0F, 0.0F, -1.0F, 2.0F, 12.0F, 2.0F), PartPose.offset(0.0F, 12.0F, 0.0F));
             PartDefinition lThigh = r.addOrReplaceChild("left_thigh", CubeListBuilder.create().texOffs(0, 16).mirror().addBox(-1.5F, 0.0F, -1.5F, 3.0F, 12.0F, 3.0F), PartPose.offset(2.2F, 0.0F, 0.0F));
             lThigh.addOrReplaceChild("left_shin", CubeListBuilder.create().texOffs(0, 31).mirror().addBox(-1.0F, 0.0F, -1.0F, 2.0F, 12.0F, 2.0F), PartPose.offset(0.0F, 12.0F, 0.0F));
-            return LayerDefinition.create(mesh, 64, 64);
+            return LayerDefinition.create(m, 64, 64);
         }
         @Override public void setupAnim(WhispererEntity e, float s, float sa, float t, float yaw, float pitch) {
             boolean rag = e.isRaging() || sa > 0.45F, star = e.isStaring(); float sp = 0.6662F;
