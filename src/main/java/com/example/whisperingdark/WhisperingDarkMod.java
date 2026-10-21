@@ -86,8 +86,11 @@ public class WhisperingDarkMod {
         @Override public boolean isAttackable() { return false; }
         @Override public boolean isPickable() { return false; }
         @Override public boolean isPushable() { return false; }
-        @Override public boolean isInvulnerableTo(DamageSource s) { return !s.is(DamageTypeTags.BYPASSES_INVULNERABILITY); }
-        @Override public boolean hurt(DamageSource s, float a) { return s.is(DamageTypeTags.BYPASSES_INVULNERABILITY) && super.hurt(s, a); }
+        @Override public boolean isInvulnerableTo(DamageSource s) { return true; }
+        @Override public@Override public boolean fireImmune() { return true; }
+        boolean hurt(DamageSource s, float a) { return false; }
+        
+
         @Override protected void registerGoals() {
             this.goalSelector.addGoal(0, new FloatGoal(this));
             this.goalSelector.addGoal(2, new MeleeAttackGoal(this, 1.4D, false));
