@@ -86,7 +86,7 @@ public class WhisperingDarkMod {
                     .build(new ResourceLocation(MODID, "whisperer").toString()));
 
     public static final RegistryObject<Item> WHISPERER_SPAWN_EGG = ITEMS.register("whisperer_spawn_egg",
-            () -> new ForgeSpawnEggItem(WHISPERER, 0x050507, 0x7A161C, new Item.Properties()));
+            () -> new ForgeSpawnEggItem(WHISPERER, 0x181B20, 0x5E645C, new Item.Properties()));
 
     public WhisperingDarkMod() {
         IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
@@ -166,54 +166,41 @@ public class WhisperingDarkMod {
         public boolean canBreatheUnderwater() { return true; }
         @Override
         public boolean causeFallDamage(float d, float m, DamageSource s) { return false; }
-        @Override
-        protected void checkFallDamage(double y, boolean onGround, BlockState state, BlockPos pos) { this.resetFallDistance(); }
-        @Override
-        public boolean canBeAffected(MobEffectInstance effect) { return false; }
-        @Override
-        public void knockback(double s, double x, double z) {}
-        @Override
-        public void push(Entity entity) {}
-        @Override
-        public boolean isPushable() { return false; }
-        @Override
-        public boolean ignoreExplosion() { return true; }
-        @Override
-        public boolean removeWhenFarAway(double dist) { return false; }
-
-        @Override
-        protected void registerGoals() {
-            this.goalSelector.addGoal(0, new FloatGoal(this));
-            this.goalSelector.addGoal(1, new FreezeWhenLookedAtGoal(this));
-            this.goalSelector.addGoal(2, new WhispererChaseGoal(this, 1.45D, true));
-            this.goalSelector.addGoal(3, new SilentStalkGoal(this, 0.85D, 14.0F, 36.0F));
-            this.goalSelector.addGoal(4, new LookAtPlayerGoal(this, Player.class, 48.0F, 1.0F));
-            this.goalSelector.addGoal(5, new WaterAvoidingRandomStrollGoal(this, 0.6D));
-            this.targetSelector.addGoal(1, new NearestAttackableTargetGoal<>(this, Player.class, false));
-        }
-
-        @Override
+              @Override
         public void tick() {
             super.tick();
             if (!this.level().isClientSide) {
                 LivingEntity target = this.getTarget();
                 if (target instanceof Player player && !player.isCreative() && !player.isSpectator()) {
+                    double dist = this.distanceTo(player);
                     boolean lookedAt = isPlayerLookingAtMe(player);
                     this.setFrozenByLook(lookedAt && !this.isRaging());
                     if (lookedAt) {
-                        stareTicks++;
-                        if (stareTicks > 60 || this.distanceTo(player) < 8.0F) {
-                            triggerRage(player);
-                        }
+                        if (++stareTicks > 45 || dist < 8.5D) triggerRage(player);
                     } else {
                         stareTicks = Math.max(0, stareTicks - 1);
                     }
-                    if (--ambianceCooldown <= 0) {
-                        ambianceCooldown = 120 + this.random.nextInt(100);
-                        this.level().playSound(null, player.blockPosition(), SoundEvents.WARDEN_NEARBY_CLOSEST, SoundSource.HOSTILE, 0.65F, 0.5F);
-                        if (this.distanceTo(player) < 20.0F) {
-                            player.addEffect(new MobEffectInstance(MobEffects.DARKNESS, 60, 0, false, false));
+                    if (dist < 28.0D && this.tickCount % 26 == 0) {
+                        this.level().playSound(null, player.blockPosition(), SoundEvents.WARDEN_HEARTBEAT, SoundSource.HOSTILE, 0.9F, 0.50F);
+                        this.level().playSound(null, player.blockPosition(), SoundEvents.WARDEN_NEARBY_CLOSEST, SoundSource.HOSTILE, 0.75F, 0.53F);
+                    }
+                    if (this.isRaging()) {
+                        if (this.tickCount % 16 == 0 && dist < 24.0D) {
+                            this.level().playSound(null, player.blockPosition(), SoundEvents.BELL_RESONATE, SoundSource.HOSTILE, 0.85F, 1.95F);
+                            this.level().playSound(null, this.blockPosition(), SoundEvents.ENDERMAN_SCREAM, SoundSource.HOSTILE, 0.75F, 0.55F + ((this.tickCount % 40) / 40.0F) * 0.95F);
                         }
+                        if ((this.tickCount % 13 == 0 || this.tickCount % 13 == 5) && this.getDeltaMovement().horizontalDistanceSqr() > 0.0015D) {
+                            this.level().playSound(null, this.blockPosition(), SoundEvents.BONE_BLOCK_BREAK, SoundSource.HOSTILE, 0.95F, 0.55F + this.random.nextFloat() * 0.4F);
+                            this.level().playSound(null, this.blockPosition(), SoundEvents.SLIME_SQUISH_SMALL, SoundSource.HOSTILE, 0.60F, 0.55F);
+                        }
+                    }
+                    if (--ambianceCooldown <= 0) {
+                        ambianceCooldown = 95 + this.random.nextInt(75);
+                        Vec3 b = player.position().subtract(player.getLookAngle().scale(2.2D));
+                        BlockPos pos = BlockPos.containing(b.x, player.getEyeY(), b.z);
+                        this.level().playSound(null, pos, SoundEvents.ENDERMAN_STARE, SoundSource.AMBIENT, 0.45F, 0.52F);
+                        this.level().playSound(null, pos, SoundEvents.SCULK_SHRIEKER_SHRIEK, SoundSource.AMBIENT, 0.35F, 0.50F);
+                        if (dist < 20.0D) player.addEffect(new MobEffectInstance(MobEffects.DARKNESS, 80, 0, false, false));
                     }
                 } else {
                     this.setFrozenByLook(false);
@@ -228,11 +215,25 @@ public class WhisperingDarkMod {
                 this.setRaging(true);
                 this.setStalking(false);
                 this.setFrozenByLook(false);
-                this.level().playSound(null, this.blockPosition(), SoundEvents.ENDERMAN_SCREAM, SoundSource.HOSTILE, 1.2F, 0.4F);
-                player.addEffect(new MobEffectInstance(MobEffects.DARKNESS, 140, 0, false, false));
+                this.level().playSound(null, this.blockPosition(), SoundEvents.ENDERMAN_SCREAM, SoundSource.HOSTILE, 1.3F, 0.50F);
+                this.level().playSound(null, player.blockPosition(), SoundEvents.BELL_RESONATE, SoundSource.HOSTILE, 1.0F, 1.98F);
+                this.level().playSound(null, this.blockPosition(), SoundEvents.BONE_BLOCK_BREAK, SoundSource.HOSTILE, 1.2F, 0.55F);
+                player.addEffect(new MobEffectInstance(MobEffects.DARKNESS, 160, 0, false, false));
             }
         }
-
+  @Override
+        protected void checkFallDamage(double y, boolean onGround, BlockState state, BlockPos pos) { this.resetFallDistance(); }
+        @Override
+        public boolean canBeAffected(MobEffectInstance effect) { return false; }
+        @Override
+        public void knockback(double s, double x, double z) {}
+        @Override
+        public void push(Entity entity) {}
+        @Override
+        public boolean isPushable() { return false; }
+        @Override
+        public boolean ignoreExplosion() { return true; }
+      
         public boolean isPlayerLookingAtMe(Player player) {
             Vec3 viewVec = player.getViewVector(1.0F).normalize();
             Vec3 toEntity = new Vec3(this.getX() - player.getX(), this.getEyeY() - player.getEyeY(), this.getZ() - player.getZ());
