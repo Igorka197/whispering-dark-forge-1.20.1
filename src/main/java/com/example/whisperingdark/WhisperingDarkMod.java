@@ -463,34 +463,42 @@ public class WhisperingDarkMod {
                     this.getParentModel().renderToBuffer(poseStack, consumer, 15728640, OverlayTexture.NO_OVERLAY, 0.65F, 0.72F, 0.78F, 1.0F);
                 }
             });
-        }
-
-        private static void ensureTextures() {
+              private static void ensureTextures() {
             if (baseTexture != null) return;
             NativeImage baseImg = new NativeImage(128, 128, true);
             NativeImage eyesImg = new NativeImage(128, 128, true);
-            for (int y = 0; y < 128; y++) {
-                for (int x = 0; x < 128; x++) {
-                    double n1 = Math.sin(x * 0.19 + Math.cos(y * 0.17) * 2.6) * 0.5 + 0.5;
-                    double n2 = Math.cos(x * 0.47 - y * 0.41 + n1 * 3.3) * 0.5 + 0.5;
-                    double cr = Math.abs(Math.sin(x * 0.31 + y * 0.27 + n1 * 4.5));
-                    double td = Math.sin(y * 0.92 + x * 0.15 + n1 * 5.2) * 0.5 + 0.5;
-                    int r = (int)(22 + n1 * 34 + n2 * 22 + (td > 0.55 ? 38 : 0));
-                    int g = (int)(25 + n1 * 38 + n2 * 24 + (td > 0.55 ? 42 : 0));
-                    int b = (int)(30 + n1 * 40 + n2 * 20 + (td > 0.55 ? 30 : 0));
-                    if (cr < 0.09) { r = 11; g = 13; b = 17; }
-                    else if (cr < 0.15) { r = 112; g = 124; b = 136; }
-                    baseImg.setPixelRGBA(x, y, (255 << 24) | (Mth.clamp(b, 10, 220) << 16) | (Mth.clamp(g, 10, 220) << 8) | Mth.clamp(r, 10, 220));
-                    eyesImg.setPixelRGBA(x, y, (cr >= 0.09 && cr < 0.14) ? 0x60928476 : 0x00000000);
-                }
+            for (int y = 0; y < 128; y++) for (int x = 0; x < 128; x++) {
+                int v = 5 + ((x * 7 + y * 13) % 5);
+                baseImg.setPixelRGBA(x, y, (255 << 24) | ((v + 2) << 16) | (v << 8) | v);
+                eyesImg.setPixelRGBA(x, y, 0x00000000);
             }
-            for (int y = 7; y < 17; y++) for (int x = 41; x < 49; x++) baseImg.setPixelRGBA(x, y, 0xFF5A645C);
-            baseImg.setPixelRGBA(42, 10, 0xFFD0C8B8); eyesImg.setPixelRGBA(42, 10, 0xFFD8D0C0);
-            baseImg.setPixelRGBA(47, 11, 0xFFC8C0B0); eyesImg.setPixelRGBA(47, 11, 0xFFD0C8B8);
+            int[] ox = {8, 40};
+            for (int bx : ox) {
+                for (int y = 9; y < 17; y++) for (int x = bx + 1; x < bx + 8; x++) {
+                    int c = Math.max(14, 96 - (Math.abs(x - (bx + 4)) + Math.abs(y - 12)) * 14);
+                    baseImg.setPixelRGBA(x, y, (255 << 24) | ((c + 4) << 16) | (c << 8) | c);
+                }
+                for (int y = 10; y <= 12; y++) {
+                    for (int x = bx + 1; x <= bx + 3; x++) baseImg.setPixelRGBA(x, y, 0xFF040303);
+                    for (int x = bx + 5; x <= bx + 7; x++) baseImg.setPixelRGBA(x, y, 0xFF040303);
+                }
+                baseImg.setPixelRGBA(bx + 2, 11, 0xFFFFFFFF); eyesImg.setPixelRGBA(bx + 2, 11, 0xFFFFFFFF);
+                baseImg.setPixelRGBA(bx + 6, 11, 0xFFFFFFFF); eyesImg.setPixelRGBA(bx + 6, 11, 0xFFFFFFFF);
+                for (int x = bx + 2; x <= bx + 6; x++) for (int y = 14; y <= 17; y++)
+                    baseImg.setPixelRGBA(x, y, ((y == 14 || y == 16) && x % 2 == 0) ? 0xFFC0CDD8 : 0xFF0E0A48);
+            }
+            for (int row = 21; row <= 28; row += 2) for (int x = 29; x < 36; x++) {
+                baseImg.setPixelRGBA(x, row, 0xFF2C2A30); baseImg.setPixelRGBA(x, row + 1, 0xFF0E0A32);
+            }
+            for (int y = 20; y <= 30; y++) baseImg.setPixelRGBA(32, y, 0xFF343038);
+            for (int y = 50; y < 60; y++) {
+                int col = (255 << 24) | (12 << 16) | (8 << 8) | ((y - 49) * 12);
+                for (int x = 12; x < 30; x++) baseImg.setPixelRGBA(x, y, col);
+                for (int x = 42; x < 60; x++) baseImg.setPixelRGBA(x, y, col);
+            }
             baseTexture = Minecraft.getInstance().getTextureManager().register("whisperer_base", new DynamicTexture(baseImg));
             eyesTexture = Minecraft.getInstance().getTextureManager().register("whisperer_eyes", new DynamicTexture(eyesImg));
-        }
-
+              }  }
         @Override
         public ResourceLocation getTextureLocation(WhispererEntity entity) {
             ensureTextures();
