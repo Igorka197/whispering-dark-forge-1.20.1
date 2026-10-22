@@ -170,16 +170,7 @@ public class WhisperingDarkMod {
         public void tick() {
             super.tick();
             if (!this.level().isClientSide) {
-                LivingEntity target = this.getTarget();
-                if (target instanceof Player player && !player.isCreative() && !player.isSpectator()) {
-                    double dist = this.distanceTo(player);
-                    boolean lookedAt = isPlayerLookingAtMe(player);
-                    this.setFrozenByLook(lookedAt && !this.isRaging());
-                    if (lookedAt) {
-                        if (++stareTicks > 45 || dist < 8.5D) triggerRage(player);
-                    } else {
-                        stareTicks = Math.max(0, stareTicks - 1);
-                    }
+                LivingEntity target = this.getTarget() != null && this.getTarget().isAlive() ? this.getTarget() : this.level().getNearestPlayer(this, 64.0D); if (target instanceof Player player && !player.isSpectator()) { this.setTarget(player); double dist = this.distanceTo(player); boolean lookedAt = dist < 48.0D && player.getViewVector(1.0F).normalize().dot(new Vec3(this.getX() - player.getX(), (this.getY() + 1.8D) - player.getEyeY(), this.getZ() - player.getZ()).normalize()) > 0.88D && player.hasLineOfSight(this); if (dist < 12.0D || (lookedAt && ++stareTicks > 20)) triggerRage(player); else if (!lookedAt) stareTicks = Math.max(0, stareTicks - 1); this.setFrozenByLook(lookedAt && !this.isRaging() && dist >= 12.0D); if (this.isRaging()) { if (this.tickCount % 4 == 0) this.getNavigation().moveTo(player, 1.65D); if (dist < 2.8D && this.tickCount % 15 == 0) this.doHurtTarget(player); if (dist > 14.0D && this.tickCount % 60 == 0) { Vec3 j = player.position().subtract(player.getLookAngle().scale(3.5D)); this.teleportTo(j.x, player.getY(), j.z); this.level().playSound(null, this.blockPosition(), SoundEvents.ENDERMAN_TELEPORT, SoundSource.HOSTILE, 1.2F, 0.5F); } } else if (!this.isFrozenByLook() && this.tickCount % 10 == 0) this.getNavigation().moveTo(player, 1.05D); }   }
                     if (dist < 28.0D && this.tickCount % 26 == 0) {
                         this.level().playSound(null, player.blockPosition(), SoundEvents.WARDEN_HEARTBEAT, SoundSource.HOSTILE, 0.9F, 0.50F);
                         this.level().playSound(null, player.blockPosition(), SoundEvents.WARDEN_NEARBY_CLOSEST, SoundSource.HOSTILE, 0.75F, 0.53F);
