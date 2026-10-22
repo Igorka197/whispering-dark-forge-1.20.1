@@ -418,30 +418,39 @@ public class WhisperingDarkMod {
         @Override
         public ModelPart root() { return this.root; }
 
-        @Override
+                @Override
         public void setupAnim(WhispererEntity entity, float limbSwing, float limbSwingAmount, float ageInTicks, float netHeadYaw, float headPitch) {
             this.root().getAllParts().forEach(ModelPart::resetPose);
+            float qT = (float) Math.floor(ageInTicks * 0.6F) / 0.6F;
+            float sp = Mth.sin(ageInTicks * 3.1F) * Mth.cos(ageInTicks * 5.3F);
+            float qS = (float) Math.floor(Mth.cos(limbSwing * 0.6662F) * 3.2F) / 3.2F;
             this.headHood.yRot = netHeadYaw * ((float) Math.PI / 180F) * 0.85F;
             this.headHood.xRot = headPitch * ((float) Math.PI / 180F) * 0.75F;
             if (entity.isFrozenByLook()) {
-                this.headHood.zRot = 0.28F + Mth.sin(ageInTicks * 0.7F) * 0.05F;
+                this.headHood.zRot = 0.42F + sp * 0.08F;
             } else if (entity.isRaging()) {
-                this.headHood.zRot = Mth.sin(ageInTicks * 1.4F) * 0.14F;
-                this.thorax.xRot = 0.38F;
+                this.headHood.zRot = (float) Math.floor(Mth.sin(qT * 0.45F) * 2.1F) * 0.52F + sp * 0.24F;
+                this.thorax.xRot = 0.54F + sp * 0.10F;
+                this.thorax.yRot = qS * 0.28F;
+                this.thorax.zRot = sp * 0.14F;
             } else {
-                this.headHood.zRot = Mth.sin(ageInTicks * 0.05F) * 0.06F;
+                this.headHood.zRot = (float) Math.floor(Mth.sin(qT * 0.08F) * 2.0F) * 0.18F + sp * 0.04F;
             }
-            float speed = entity.isRaging() ? 1.35F : 0.65F;
-            this.leftLegUpper.xRot = Mth.cos(limbSwing * 0.6662F) * 0.9F * limbSwingAmount * speed;
-            this.rightLegUpper.xRot = Mth.cos(limbSwing * 0.6662F + (float) Math.PI) * 0.9F * limbSwingAmount * speed;
+            float speed = entity.isRaging() ? 1.42F : 0.70F;
+            this.leftLegUpper.xRot = qS * 0.95F * limbSwingAmount * speed;
+            this.rightLegUpper.xRot = -qS * 0.95F * limbSwingAmount * speed;
             if (entity.isRaging()) {
-                this.leftArmUpper.xRot = -1.15F + Mth.cos(limbSwing * 0.6662F + (float) Math.PI) * 0.7F * limbSwingAmount;
-                this.rightArmUpper.xRot = -1.15F + Mth.cos(limbSwing * 0.6662F) * 0.7F * limbSwingAmount;
-                this.leftArmLower.xRot = -0.45F;
-                this.rightArmLower.xRot = -0.45F;
+                this.leftArmUpper.xRot = -1.45F + qS * 0.95F * limbSwingAmount + sp * 0.18F;
+                this.rightArmUpper.xRot = -1.35F - qS * 0.95F * limbSwingAmount - sp * 0.18F;
+                this.leftArmUpper.zRot = -0.32F - sp * 0.14F;
+                this.rightArmUpper.zRot = 0.36F + sp * 0.14F;
+                this.leftArmLower.xRot = -0.78F + Mth.sin(ageInTicks * 1.9F) * 0.35F;
+                this.rightArmLower.xRot = -0.92F - Mth.cos(ageInTicks * 2.3F) * 0.35F;
+                this.leftArmLower.zRot = 0.38F;
+                this.rightArmLower.zRot = -0.42F;
             } else {
-                this.leftArmUpper.xRot = Mth.cos(limbSwing * 0.6662F + (float) Math.PI) * 0.45F * limbSwingAmount;
-                this.rightArmUpper.xRot = Mth.cos(limbSwing * 0.6662F) * 0.45F * limbSwingAmount;
+                this.leftArmUpper.xRot = -qS * 0.45F * limbSwingAmount;
+                this.rightArmUpper.xRot = qS * 0.45F * limbSwingAmount;
             }
         }
     }
@@ -459,7 +468,7 @@ public class WhisperingDarkMod {
                 public void render(PoseStack poseStack, MultiBufferSource buffer, int packedLight, WhispererEntity entity,
                                    float limbSwing, float limbSwingAmount, float partialTicks, float ageInTicks, float netHeadYaw, float headPitch) {
                     VertexConsumer consumer = buffer.getBuffer(RenderType.eyes(eyesTexture));
-                    this.getParentModel().renderToBuffer(poseStack, consumer, 15728640, OverlayTexture.NO_OVERLAY, 1.0F, 1.0F, 1.0F, 1.0F);
+                    this.getParentModel().renderToBuffer(poseStack, consumer, 15728640, OverlayTexture.NO_OVERLAY, 0.65F, 0.72F, 0.78F, 1.0F);
                 }
             });
         }
@@ -470,28 +479,22 @@ public class WhisperingDarkMod {
             NativeImage eyesImg = new NativeImage(128, 128, true);
             for (int y = 0; y < 128; y++) {
                 for (int x = 0; x < 128; x++) {
-                    baseImg.setPixelRGBA(x, y, 0xFF070505);
-                    eyesImg.setPixelRGBA(x, y, 0x00000000);
+                    double n1 = Math.sin(x * 0.19 + Math.cos(y * 0.17) * 2.6) * 0.5 + 0.5;
+                    double n2 = Math.cos(x * 0.47 - y * 0.41 + n1 * 3.3) * 0.5 + 0.5;
+                    double cr = Math.abs(Math.sin(x * 0.31 + y * 0.27 + n1 * 4.5));
+                    double td = Math.sin(y * 0.92 + x * 0.15 + n1 * 5.2) * 0.5 + 0.5;
+                    int r = (int)(22 + n1 * 34 + n2 * 22 + (td > 0.55 ? 38 : 0));
+                    int g = (int)(25 + n1 * 38 + n2 * 24 + (td > 0.55 ? 42 : 0));
+                    int b = (int)(30 + n1 * 40 + n2 * 20 + (td > 0.55 ? 30 : 0));
+                    if (cr < 0.09) { r = 11; g = 13; b = 17; }
+                    else if (cr < 0.15) { r = 112; g = 124; b = 136; }
+                    baseImg.setPixelRGBA(x, y, (255 << 24) | (Mth.clamp(b, 10, 220) << 16) | (Mth.clamp(g, 10, 220) << 8) | Mth.clamp(r, 10, 220));
+                    eyesImg.setPixelRGBA(x, y, (cr >= 0.09 && cr < 0.14) ? 0x60928476 : 0x00000000);
                 }
             }
-            for (int y = 7; y < 17; y++) {
-                for (int x = 41; x < 49; x++) baseImg.setPixelRGBA(x, y, 0xFF858E9E);
-            }
-            for (int x = 42; x <= 43; x++) {
-                baseImg.setPixelRGBA(x, 10, 0xFF0A0709);
-                eyesImg.setPixelRGBA(x, 10, 0xFFC9D2D8);
-            }
-            for (int x = 46; x <= 47; x++) {
-                baseImg.setPixelRGBA(x, 11, 0xFF0A0709);
-                eyesImg.setPixelRGBA(x, 11, 0xFF1C167A);
-            }
-            for (int row = 22; row <= 28; row += 2) {
-                for (int x = 29; x < 36; x++) baseImg.setPixelRGBA(x, row, 0xFF241D1F);
-            }
-            for (int y = 53; y < 57; y++) {
-                for (int x = 22; x < 30; x++) baseImg.setPixelRGBA(x, y, 0xFF1C167A);
-                for (int x = 52; x < 60; x++) baseImg.setPixelRGBA(x, y, 0xFF1C167A);
-            }
+            for (int y = 7; y < 17; y++) for (int x = 41; x < 49; x++) baseImg.setPixelRGBA(x, y, 0xFF5A645C);
+            baseImg.setPixelRGBA(42, 10, 0xFFD0C8B8); eyesImg.setPixelRGBA(42, 10, 0xFFD8D0C0);
+            baseImg.setPixelRGBA(47, 11, 0xFFC8C0B0); eyesImg.setPixelRGBA(47, 11, 0xFFD0C8B8);
             baseTexture = Minecraft.getInstance().getTextureManager().register("whisperer_base", new DynamicTexture(baseImg));
             eyesTexture = Minecraft.getInstance().getTextureManager().register("whisperer_eyes", new DynamicTexture(eyesImg));
         }
