@@ -196,10 +196,10 @@ public class WhisperingDarkMod {
                     this.setFrozenByLook(false);
                     this.setRaging(false);
                     this.setStalking(true);
-                }
-            }
+                }}
+            }}
         }
-
+}
         private void triggerRage(Player player) {
             if (!this.isRaging()) {
                 this.setRaging(true);
