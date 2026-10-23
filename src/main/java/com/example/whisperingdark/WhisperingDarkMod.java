@@ -461,6 +461,9 @@ public class WhisperingDarkMod {
                     this.getParentModel().renderToBuffer(poseStack, consumer, 15728640, OverlayTexture.NO_OVERLAY, 0.65F, 0.72F, 0.78F, 1.0F);
                 }
             });
+        }
+
+
               private static void ensureTextures() {
             if (baseTexture != null) return;
             NativeImage baseImg = new NativeImage(128, 128, true);
