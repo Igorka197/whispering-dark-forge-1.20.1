@@ -184,8 +184,7 @@ public class WhisperingDarkMod {
                             this.level().playSound(null, this.blockPosition(), SoundEvents.BONE_BLOCK_BREAK, SoundSource.HOSTILE, 0.95F, 0.55F + this.random.nextFloat() * 0.4F);
                             this.level().playSound(null, this.blockPosition(), SoundEvents.SLIME_SQUISH_SMALL, SoundSource.HOSTILE, 0.60F, 0.55F);
                         }
-                    }
-                    if (--ambianceCooldown <= 0) {
+                                     if (--ambianceCooldown <= 0) {
                         ambianceCooldown = 95 + this.random.nextInt(75);
                         Vec3 b = player.position().subtract(player.getLookAngle().scale(2.2D));
                         BlockPos pos = BlockPos.containing(b.x, player.getEyeY(), b.z);
