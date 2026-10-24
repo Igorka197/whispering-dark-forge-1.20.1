@@ -293,7 +293,8 @@ public class WhisperingDarkMod {
             }
 
             LivingEntity rawTarget = this.getTarget();
-            if (!(rawTarget instanceof Player player) || !player.isAlive() || player.isCreative() || player.isSpectator()) {
+            Player player = (rawTarget instanceof Player p) ? p : null;
+            if (player == null || !player.isAlive() || player.isCreative() || player.isSpectator()) {
                 Player nearest = this.level().getNearestPlayer(this, 42.0D);
                 if (nearest != null && !nearest.isCreative() && !nearest.isSpectator()) {
                     this.setTarget(nearest);
