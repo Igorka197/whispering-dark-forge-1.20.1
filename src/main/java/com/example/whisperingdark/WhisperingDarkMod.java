@@ -506,4 +506,3 @@ public class WhisperingDarkMod {
             return baseTexture;
         }
     }
-}
