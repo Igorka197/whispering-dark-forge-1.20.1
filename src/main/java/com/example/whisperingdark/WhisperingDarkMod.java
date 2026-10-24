@@ -30,8 +30,10 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.world.damagesource.DamageTypes;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.MobCategory;
@@ -46,7 +48,6 @@ import net.minecraft.world.entity.ai.goal.LookAtPlayerGoal;
 import net.minecraft.world.entity.ai.goal.MeleeAttackGoal;
 import net.minecraft.world.entity.ai.goal.RandomLookAroundGoal;
 import net.minecraft.world.entity.ai.goal.WaterAvoidingRandomStrollGoal;
-import net.minecraft.world.entity.ai.goal.target.HurtByTargetGoal;
 import net.minecraft.world.entity.ai.goal.target.NearestAttackableTargetGoal;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.entity.player.Player;
@@ -68,6 +69,7 @@ import net.minecraftforge.event.BuildCreativeModeTabContentsEvent;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.entity.EntityAttributeCreationEvent;
 import net.minecraftforge.event.entity.SpawnPlacementRegisterEvent;
+import net.minecraftforge.event.entity.living.LivingDeathEvent;
 import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
@@ -78,6 +80,8 @@ import net.minecraftforge.registries.ForgeRegistries;
 import net.minecraftforge.registries.RegistryObject;
 
 import java.util.EnumSet;
+import java.util.List;
+import java.util.UUID;
 
 @Mod(WhisperingDarkMod.MODID)
 public class WhisperingDarkMod {
@@ -148,19 +152,34 @@ public class WhisperingDarkMod {
     }
 
     @SubscribeEvent
+    public void onLivingDeath(LivingDeathEvent event) {
+        if (event.getEntity().level().isClientSide) return;
+        if (event.getEntity() instanceof Player deadPlayer) {
+            Level level = deadPlayer.level();
+            List<WhispererEntity> whisperers = level.getEntitiesOfClass(
+                    WhispererEntity.class, deadPlayer.getBoundingBox().inflate(128.0D));
+            for (WhispererEntity w : whisperers) {
+                if (w.isHuntingPlayer(deadPlayer)) {
+                    w.vanishWithSound();
+                }
+            }
+        }
+    }
+
+    @SubscribeEvent
     public void onPlayerTick(TickEvent.PlayerTickEvent event) {
         if (event.phase != TickEvent.Phase.END || event.player.level().isClientSide) return;
         if (event.player.tickCount % 180 != 0) return;
 
         Player player = event.player;
-        if (player.isCreative() || player.isSpectator()) return;
+        if (!player.isAlive() || player.isCreative() || player.isSpectator()) return;
         Level level = player.level();
         if (level.getSkyDarken() < 7 && !level.isThundering() && player.getY() > 52.0D) return;
 
         BlockPos ppos = player.blockPosition();
         if (level.getBrightness(LightLayer.BLOCK, ppos) > 2) return;
 
-        if (!level.getEntitiesOfClass(WhispererEntity.class, player.getBoundingBox().inflate(48.0D)).isEmpty()) {
+        if (!level.getEntitiesOfClass(WhispererEntity.class, player.getBoundingBox().inflate(64.0D)).isEmpty()) {
             return;
         }
 
@@ -180,7 +199,7 @@ public class WhisperingDarkMod {
                 if (entity != null) {
                     entity.moveTo(valid.getX() + 0.5D, valid.getY(), valid.getZ() + 0.5D,
                             level.random.nextFloat() * 360.0F, 0.0F);
-                    entity.setTarget(player);
+                    entity.lockHuntedPlayer(player);
                     level.addFreshEntity(entity);
                 }
             }
@@ -203,14 +222,17 @@ public class WhisperingDarkMod {
     public static class WhispererEntity extends Monster {
         private static final EntityDataAccessor<Boolean> RAGING =
                 SynchedEntityData.defineId(WhispererEntity.class, EntityDataSerializers.BOOLEAN);
-        private static final EntityDataAccessor<Boolean> FROZEN =
+        private static final EntityDataAccessor<Boolean> CONTORTING =
                 SynchedEntityData.defineId(WhispererEntity.class, EntityDataSerializers.BOOLEAN);
-        private static final EntityDataAccessor<Boolean> CREEPING =
+        private static final EntityDataAccessor<Boolean> CONVULSING =
                 SynchedEntityData.defineId(WhispererEntity.class, EntityDataSerializers.BOOLEAN);
 
-        private int directLookTicks = 0;
+        private UUID huntedPlayerUUID = null;
+        private int contortTicks = 0;
+        private int convulseTicks = 0;
+        private boolean hasGrantedAttackGrace = false;
+        private boolean hasReactedToPlayerHit = false;
         private int unseenStalkTicks = 0;
-        private int rageDurationTicks = 0;
         private int orbitSwitchCooldown = 0;
         private int orbitDirection = 1;
         private int shadowStepCooldown = 0;
@@ -218,33 +240,151 @@ public class WhisperingDarkMod {
         public WhispererEntity(EntityType<? extends Monster> type, Level level) {
             super(type, level);
             this.setMaxUpStep(1.25F);
-            this.xpReward = 35;
+            this.setInvulnerable(true);
+            this.setPersistenceRequired();
+            this.xpReward = 0;
         }
 
         @Override
         protected void defineSynchedData() {
             super.defineSynchedData();
             this.entityData.define(RAGING, false);
-            this.entityData.define(FROZEN, false);
-            this.entityData.define(CREEPING, false);
+            this.entityData.define(CONTORTING, false);
+            this.entityData.define(CONVULSING, false);
         }
 
         public static AttributeSupplier.Builder createAttributes() {
             return Monster.createMonsterAttributes()
-                    .add(Attributes.MAX_HEALTH, 70.0D)
-                    .add(Attributes.MOVEMENT_SPEED, 0.25D)
+                    .add(Attributes.MAX_HEALTH, 1000.0D)
+                    .add(Attributes.MOVEMENT_SPEED, 0.26D)
                     .add(Attributes.ATTACK_DAMAGE, 10.0D)
-                    .add(Attributes.FOLLOW_RANGE, 56.0D)
-                    .add(Attributes.KNOCKBACK_RESISTANCE, 0.75D);
+                    .add(Attributes.FOLLOW_RANGE, 64.0D)
+                    .add(Attributes.KNOCKBACK_RESISTANCE, 1.0D);
         }
 
         public boolean isRaging() { return this.entityData.get(RAGING); }
         public void setRaging(boolean v) { this.entityData.set(RAGING, v); }
-        public boolean isFrozenByLook() { return this.entityData.get(FROZEN); }
-        public void setFrozenByLook(boolean v) { this.entityData.set(FROZEN, v); }
-        public boolean isCreeping() { return this.entityData.get(CREEPING); }
-        public void setCreeping(boolean v) { this.entityData.set(CREEPING, v); }
+        public boolean isContorting() { return this.entityData.get(CONTORTING); }
+        public void setContorting(boolean v) { this.entityData.set(CONTORTING, v); }
+        public boolean isConvulsing() { return this.entityData.get(CONVULSING); }
+        public void setConvulsing(boolean v) { this.entityData.set(CONVULSING, v); }
         public int getOrbitDirection() { return this.orbitDirection; }
+
+        public void lockHuntedPlayer(Player player) {
+            this.huntedPlayerUUID = player.getUUID();
+            this.setTarget(player);
+        }
+
+        public boolean isHuntingPlayer(Player player) {
+            if (this.huntedPlayerUUID != null && this.huntedPlayerUUID.equals(player.getUUID())) {
+                return true;
+            }
+            LivingEntity t = this.getTarget();
+            return t != null && t.getUUID().equals(player.getUUID());
+        }
+
+        @Override
+        public boolean removeWhenFarAway(double distanceToClosestPlayer) {
+            return false;
+        }
+
+        @Override
+        public void knockback(double strength, double x, double z) {
+            // 100% сопротивление отбрасыванию — не сдвигается ни на миллиметр
+        }
+
+        @Override
+        public boolean isPushable() {
+            return false;
+        }
+
+        @Override
+        protected void doPush(Entity entity) {
+        }
+
+        @Override
+        public boolean isInvulnerableTo(DamageSource source) {
+            if (source.is(DamageTypes.GENERIC_KILL)) {
+                return false;
+            }
+            return true;
+        }
+
+        @Override
+        public boolean hurt(DamageSource source, float amount) {
+            if (source.is(DamageTypes.GENERIC_KILL)) {
+                return super.hurt(source, amount);
+            }
+            if (!this.level().isClientSide) {
+                // Глухой металлический/костный удар, показывающий полную бесполезность оружия
+                this.level().playSound(null, this.blockPosition(),
+                        SoundEvents.BONE_BLOCK_HIT, SoundSource.HOSTILE, 1.0F, 0.5F);
+                this.level().playSound(null, this.blockPosition(),
+                        SoundEvents.ANVIL_PLACE, SoundSource.HOSTILE, 0.35F, 0.5F);
+
+                if (source.getEntity() instanceof Player player && !player.isCreative() && !player.isSpectator()) {
+                    if (this.huntedPlayerUUID == null) {
+                        this.lockHuntedPlayer(player);
+                    }
+                    if (!this.isRaging() && !this.isContorting()) {
+                        this.startFiveSecondContortion(player);
+                    } else if (this.isRaging() && !this.hasReactedToPlayerHit && !this.isConvulsing()) {
+                        this.hasReactedToPlayerHit = true;
+                        this.startPostAttackConvulsion(32);
+                    }
+                }
+            }
+            return false;
+        }
+
+        @Override
+        public boolean doHurtTarget(Entity target) {
+            if (this.isContorting() || this.isConvulsing()) {
+                return false;
+            }
+            boolean hit = super.doHurtTarget(target);
+            if (hit && !this.level().isClientSide && target instanceof Player player) {
+                if (!player.isAlive() || player.isDeadOrDying()) {
+                    this.vanishWithSound();
+                    return true;
+                }
+                // Первый успешный удар по игроку вызывает остановку на 1-2 секунды с хрустом и судорогами;
+                // на все последующие удары монстр больше не останавливается
+                if (!this.hasGrantedAttackGrace) {
+                    this.hasGrantedAttackGrace = true;
+                    this.startPostAttackConvulsion(35);
+                }
+            }
+            return hit;
+        }
+
+        private void startFiveSecondContortion(Player player) {
+            this.lockHuntedPlayer(player);
+            this.setContorting(true);
+            this.contortTicks = 100; // Ровно 5 секунд (100 тиков)
+            this.getNavigation().stop();
+            this.setDeltaMovement(0.0D, this.getDeltaMovement().y, 0.0D);
+            this.playBoneCrunchSound(1.5F);
+            this.level().playSound(null, player.blockPosition(),
+                    SoundEvents.SCULK_SHRIEKER_SHRIEK, SoundSource.HOSTILE, 0.65F, 0.5F);
+        }
+
+        private void startPostAttackConvulsion(int ticks) {
+            this.setConvulsing(true);
+            this.convulseTicks = ticks; // 32-35 тиков (~1.6 - 1.75 секунды форы)
+            this.getNavigation().stop();
+            this.setDeltaMovement(0.0D, this.getDeltaMovement().y, 0.0D);
+            this.playBoneCrunchSound(1.4F);
+        }
+
+        public void playBoneCrunchSound(float volume) {
+            this.level().playSound(null, this.blockPosition(),
+                    SoundEvents.BONE_BLOCK_BREAK, SoundSource.HOSTILE, volume, 0.52F + this.random.nextFloat() * 0.18F);
+            this.level().playSound(null, this.blockPosition(),
+                    SoundEvents.SKELETON_CONVERTED_TO_STRAY, SoundSource.HOSTILE, volume * 0.85F, 0.55F + this.random.nextFloat() * 0.2F);
+            this.level().playSound(null, this.blockPosition(),
+                    SoundEvents.WARDEN_TENDRIL_CLICKS, SoundSource.HOSTILE, volume * 0.9F, 0.5F + this.random.nextFloat() * 0.2F);
+        }
 
         @Override
         protected void registerGoals() {
@@ -252,21 +392,10 @@ public class WhisperingDarkMod {
             this.goalSelector.addGoal(1, new WhispererChaseGoal(this, 1.32D, true));
             this.goalSelector.addGoal(2, new FlankingStalkGoal(this));
             this.goalSelector.addGoal(3, new WaterAvoidingRandomStrollGoal(this, 0.85D));
-            this.goalSelector.addGoal(4, new LookAtPlayerGoal(this, Player.class, 48.0F));
+            this.goalSelector.addGoal(4, new LookAtPlayerGoal(this, Player.class, 64.0F));
             this.goalSelector.addGoal(5, new RandomLookAroundGoal(this));
 
-            this.targetSelector.addGoal(1, new HurtByTargetGoal(this));
-            this.targetSelector.addGoal(2, new NearestAttackableTargetGoal<>(this, Player.class, false));
-        }
-
-        @Override
-        public boolean hurt(DamageSource source, float amount) {
-            boolean res = super.hurt(source, amount);
-            if (!this.level().isClientSide && source.getEntity() instanceof Player player && !this.isRaging()) {
-                this.setTarget(player);
-                this.triggerRage(player);
-            }
-            return res;
+            this.targetSelector.addGoal(1, new NearestAttackableTargetGoal<>(this, Player.class, false));
         }
 
         @Override
@@ -274,7 +403,8 @@ public class WhisperingDarkMod {
             super.tick();
 
             if (this.level().isClientSide) {
-                if (this.random.nextFloat() < (this.isRaging() ? 0.55F : 0.18F)) {
+                float particleChance = (this.isRaging() || this.isContorting() || this.isConvulsing()) ? 0.6F : 0.2F;
+                if (this.random.nextFloat() < particleChance) {
                     double rx = this.getX() + (this.random.nextDouble() - 0.5D) * 0.7D;
                     double ry = this.getY() + this.random.nextDouble() * 2.7D;
                     double rz = this.getZ() + (this.random.nextDouble() - 0.5D) * 0.7D;
@@ -286,118 +416,144 @@ public class WhisperingDarkMod {
             if (this.shadowStepCooldown > 0) this.shadowStepCooldown--;
             if (this.orbitSwitchCooldown > 0) this.orbitSwitchCooldown--;
 
-            BlockPos currentPos = this.blockPosition();
-            if (!this.isRaging() && this.level().getBrightness(LightLayer.BLOCK, currentPos) > 11) {
+            // Проверка преследуемого игрока: если он умер от любой причины или убежал достаточно далеко (> 64 блоков) — монстр исчезает
+            Player player = null;
+            if (this.huntedPlayerUUID != null) {
+                player = this.level().getPlayerByUUID(this.huntedPlayerUUID);
+                if (player == null || !player.isAlive() || player.isDeadOrDying()) {
+                    this.vanishWithSound();
+                    return;
+                }
+            } else {
+                LivingEntity rawTarget = this.getTarget();
+                if (rawTarget instanceof Player p) {
+                    if (!p.isAlive() || p.isDeadOrDying()) {
+                        this.vanishWithSound();
+                        return;
+                    }
+                    if (!p.isCreative() && !p.isSpectator()) {
+                        this.lockHuntedPlayer(p);
+                        player = p;
+                    }
+                }
+                if (player == null) {
+                    Player nearest = this.level().getNearestPlayer(this, 48.0D);
+                    if (nearest != null && nearest.isAlive() && !nearest.isCreative() && !nearest.isSpectator()) {
+                        this.lockHuntedPlayer(nearest);
+                        player = nearest;
+                    } else {
+                        return;
+                    }
+                }
+            }
+
+            if (player.isCreative() || player.isSpectator()) {
+                return;
+            }
+
+            double dist = this.distanceTo(player);
+            if (dist > 64.0D) {
+                // Игрок сумел оторваться на большое расстояние — монстр исчезает
                 this.vanishWithSound();
                 return;
             }
 
-            LivingEntity rawTarget = this.getTarget();
-            Player player = (rawTarget instanceof Player p) ? p : null;
-            if (player == null || !player.isAlive() || player.isCreative() || player.isSpectator()) {
-                Player nearest = this.level().getNearestPlayer(this, 42.0D);
-                if (nearest != null && !nearest.isCreative() && !nearest.isSpectator()) {
-                    this.setTarget(nearest);
-                    player = nearest;
-                } else {
-                    this.setFrozenByLook(false);
-                    this.setCreeping(false);
-                    return;
-                }
-            }
-
-            double dist = this.distanceTo(player);
-
-            int hbInterval = Mth.clamp((int) (dist * 1.6D), 14, 45);
-            if (dist < 28.0D && this.tickCount % hbInterval == 0) {
-                float vol = (float) Mth.clamp(1.2D - (dist / 30.0D), 0.25D, 1.0D);
+            // Давящее звуковое окружение рядом с игроком: низкий эмбиент, шорохи, скрежет и сердцебиение
+            int hbInterval = Mth.clamp((int) (dist * 1.5D), 12, 42);
+            if (dist < 32.0D && this.tickCount % hbInterval == 0) {
+                float vol = (float) Mth.clamp(1.25D - (dist / 34.0D), 0.25D, 1.0D);
                 this.level().playSound(null, player.blockPosition(),
-                        SoundEvents.WARDEN_HEARTBEAT, SoundSource.HOSTILE, vol, 0.55F);
+                        SoundEvents.WARDEN_HEARTBEAT, SoundSource.HOSTILE, vol, 0.52F);
+            }
+            if (dist < 26.0D && this.tickCount % 55 == 0) {
+                this.level().playSound(null, this.blockPosition(),
+                        SoundEvents.WARDEN_AMBIENT, SoundSource.AMBIENT, 0.75F, 0.5F);
+                this.level().playSound(null, this.blockPosition(),
+                        SoundEvents.SCULK_CATALYST_BLOOM, SoundSource.AMBIENT, 0.85F, 0.5F);
             }
 
-            if (this.isRaging()) {
-                this.setFrozenByLook(false);
-                this.setCreeping(false);
-                this.rageDurationTicks++;
+            // 1. Обработка послеударных судорог (1-2 секунды форы)
+            if (this.isConvulsing()) {
+                this.getNavigation().stop();
+                this.setDeltaMovement(0.0D, this.getDeltaMovement().y, 0.0D);
+                this.getLookControl().setLookAt(player, 45.0F, 45.0F);
+                if (this.convulseTicks % 8 == 0) {
+                    this.playBoneCrunchSound(1.15F);
+                }
+                if (--this.convulseTicks <= 0) {
+                    this.setConvulsing(false);
+                }
+                return;
+            }
 
-                if (this.tickCount % 7 == 0 && this.getDeltaMovement().horizontalDistanceSqr() > 0.002D) {
+            // 2. Обработка 5-секундной фазы выкручивания суставов при взгляде игрока
+            if (this.isContorting()) {
+                this.getNavigation().stop();
+                this.setDeltaMovement(0.0D, this.getDeltaMovement().y, 0.0D);
+                this.getLookControl().setLookAt(player, 45.0F, 45.0F);
+
+                if (this.contortTicks % 16 == 0) {
+                    this.playBoneCrunchSound(1.3F);
+                }
+                if (this.contortTicks == 50) {
+                    player.addEffect(new MobEffectInstance(MobEffects.DARKNESS, 70, 0, false, false));
+                }
+
+                if (--this.contortTicks <= 0) {
+                    this.setContorting(false);
+                    this.triggerRage(player);
+                }
+                return;
+            }
+
+            // 3. Фаза стремительной погони (на 10-15% быстрее спринта игрока)
+            if (this.isRaging()) {
+                if (this.tickCount % 6 == 0 && this.getDeltaMovement().horizontalDistanceSqr() > 0.002D) {
                     this.level().playSound(null, this.blockPosition(),
-                            SoundEvents.WARDEN_STEP, SoundSource.HOSTILE, 0.9F, 0.65F + this.random.nextFloat() * 0.25F);
+                            SoundEvents.WARDEN_STEP, SoundSource.HOSTILE, 0.95F, 0.65F + this.random.nextFloat() * 0.25F);
                     this.level().playSound(null, this.blockPosition(),
                             SoundEvents.BONE_BLOCK_BREAK, SoundSource.HOSTILE, 0.65F, 0.55F + this.random.nextFloat() * 0.35F);
                 }
 
-                if (dist < 14.0D && this.tickCount % 60 == 0) {
+                if (dist < 15.0D && this.tickCount % 60 == 0) {
                     player.addEffect(new MobEffectInstance(MobEffects.DARKNESS, 90, 0, false, false));
                 }
 
-                if (this.tickCount % 15 == 0) {
+                if (this.tickCount % 12 == 0) {
                     extinguishNearbyTorches();
                 }
-
-                if (this.rageDurationTicks > 600 || dist > 52.0D) {
-                    this.vanishWithSound();
-                }
                 return;
             }
 
-            boolean playerLooking = isPlayerLookingAtMe(player, 0.80D);
-            boolean inPeripheral = !playerLooking && isPlayerLookingAtMe(player, 0.25D);
+            // 4. Фаза скрытного преследования до прямого взгляда игрока
+            boolean playerLookingDirectly = isPlayerLookingAtMe(player, 0.80D);
+            boolean inPeripheral = !playerLookingDirectly && isPlayerLookingAtMe(player, 0.25D);
 
-            if (dist < 6.5D) {
-                this.triggerRage(player);
+            if (playerLookingDirectly) {
+                this.startFiveSecondContortion(player);
                 return;
             }
 
-            if (playerLooking) {
-                this.unseenStalkTicks = 0;
-                this.directLookTicks++;
+            this.unseenStalkTicks++;
 
-                if (this.directLookTicks <= 24) {
-                    this.setFrozenByLook(true);
-                    this.setCreeping(false);
-                    this.getNavigation().stop();
-                } else if (this.directLookTicks <= 55) {
-                    this.setFrozenByLook(false);
-                    this.setCreeping(true);
-                    if (this.directLookTicks == 25) {
-                        this.level().playSound(null, player.blockPosition(),
-                                SoundEvents.SCULK_SHRIEKER_SHRIEK, SoundSource.HOSTILE, 0.45F, 0.5F);
-                    }
-                } else {
-                    this.triggerRage(player);
-                }
-            } else {
-                this.setFrozenByLook(false);
-                this.setCreeping(false);
-                if (this.directLookTicks > 0) {
-                    this.directLookTicks = Math.max(0, this.directLookTicks - 1);
-                }
-                this.unseenStalkTicks++;
+            if (this.orbitSwitchCooldown == 0 && (inPeripheral || this.random.nextFloat() < 0.02F)) {
+                this.orbitDirection = -this.orbitDirection;
+                this.orbitSwitchCooldown = 60 + this.random.nextInt(60);
+            }
 
-                if (this.orbitSwitchCooldown == 0 && (inPeripheral || this.random.nextFloat() < 0.02F)) {
-                    this.orbitDirection = -this.orbitDirection;
-                    this.orbitSwitchCooldown = 60 + this.random.nextInt(60);
-                }
+            if (dist < 24.0D && this.unseenStalkTicks % 75 == 0) {
+                Vec3 look = player.getLookAngle();
+                BlockPos phantomPos = BlockPos.containing(
+                        player.getX() - look.x * 2.5D,
+                        player.getY() + 1.2D,
+                        player.getZ() - look.z * 2.5D
+                );
+                this.level().playSound(null, phantomPos,
+                        SoundEvents.BONE_BLOCK_STEP, SoundSource.AMBIENT, 0.85F, 0.52F + this.random.nextFloat() * 0.2F);
+            }
 
-                if (dist < 24.0D && this.unseenStalkTicks % 85 == 0) {
-                    Vec3 look = player.getLookAngle();
-                    BlockPos phantomPos = BlockPos.containing(
-                            player.getX() - look.x * 2.5D,
-                            player.getY() + 1.2D,
-                            player.getZ() - look.z * 2.5D
-                    );
-                    this.level().playSound(null, phantomPos,
-                            SoundEvents.BONE_BLOCK_STEP, SoundSource.AMBIENT, 0.85F, 0.55F + this.random.nextFloat() * 0.2F);
-                }
-
-                if (dist > 28.0D && this.shadowStepCooldown == 0 && this.unseenStalkTicks > 80) {
-                    tryShadowStepBehind(player, 14.0D);
-                }
-
-                if (this.unseenStalkTicks > 900) {
-                    this.vanishWithSound();
-                }
+            if (dist > 28.0D && dist <= 60.0D && this.shadowStepCooldown == 0 && this.unseenStalkTicks > 80) {
+                tryShadowStepBehind(player, 15.0D);
             }
         }
 
@@ -444,32 +600,33 @@ public class WhisperingDarkMod {
         public void triggerRage(Player player) {
             if (this.isRaging()) return;
             this.setRaging(true);
-            this.setFrozenByLook(false);
-            this.setCreeping(false);
-            this.rageDurationTicks = 0;
+            this.setContorting(false);
+            this.setConvulsing(false);
 
+            // Скорость в погоне на 12-15% быстрее спринта игрока (база 0.345 * множитель 1.32 в ChaseGoal)
             AttributeInstance speedAttr = this.getAttribute(Attributes.MOVEMENT_SPEED);
             if (speedAttr != null) {
-                speedAttr.setBaseValue(0.32D);
+                speedAttr.setBaseValue(0.345D);
             }
 
             player.addEffect(new MobEffectInstance(MobEffects.DARKNESS, 120, 0, false, false));
+            this.playBoneCrunchSound(1.5F);
             this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
                     WHISPER_SCREAM.get(), SoundSource.HOSTILE, 2.0F, 0.75F + this.random.nextFloat() * 0.2F);
             this.level().playSound(null, this.blockPosition(),
-                    SoundEvents.WARDEN_ROAR, SoundSource.HOSTILE, 1.2F, 0.6F);
+                    SoundEvents.WARDEN_ROAR, SoundSource.HOSTILE, 1.3F, 0.55F);
 
             if (player instanceof ServerPlayer sp) {
                 sp.playNotifySound(SoundEvents.ENDERMAN_SCREAM, SoundSource.HOSTILE, 1.0F, 0.5F);
             }
         }
 
-        private void vanishWithSound() {
+        public void vanishWithSound() {
             this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
-                    WHISPER_DISAPPEAR.get(), SoundSource.HOSTILE, 1.0F, 0.7F);
+                    WHISPER_DISAPPEAR.get(), SoundSource.HOSTILE, 1.0F, 0.65F);
             if (this.level() instanceof ServerLevel sl) {
                 sl.sendParticles(ParticleTypes.LARGE_SMOKE, this.getX(), this.getY() + 1.4D, this.getZ(),
-                        35, 0.35D, 0.9D, 0.35D, 0.03D);
+                        40, 0.35D, 0.9D, 0.35D, 0.03D);
             }
             this.discard();
         }
@@ -481,7 +638,7 @@ public class WhisperingDarkMod {
 
         @Override
         protected SoundEvent getHurtSound(DamageSource ds) {
-            return SoundEvents.WARDEN_HURT;
+            return SoundEvents.BONE_BLOCK_HIT;
         }
 
         @Override
@@ -508,13 +665,12 @@ public class WhisperingDarkMod {
         @Override
         public boolean canUse() {
             LivingEntity t = this.mob.getTarget();
-            return t != null && t.isAlive() && !this.mob.isRaging();
+            return t != null && t.isAlive() && !this.mob.isRaging() && !this.mob.isContorting() && !this.mob.isConvulsing();
         }
 
         @Override
         public boolean canContinueToUse() {
-            LivingEntity t = this.mob.getTarget();
-            return t != null && t.isAlive() && !this.mob.isRaging();
+            return canUse();
         }
 
         @Override
@@ -529,24 +685,13 @@ public class WhisperingDarkMod {
 
             this.mob.getLookControl().setLookAt(target, 35.0F, 35.0F);
 
-            if (this.mob.isFrozenByLook()) {
-                this.mob.getNavigation().stop();
-                return;
-            }
-
             if (--this.repathCooldown > 0) return;
             this.repathCooldown = 8;
 
             double dist = this.mob.distanceTo(target);
-
-            if (this.mob.isCreeping()) {
-                this.mob.getNavigation().moveTo(target, 0.78D);
-                return;
-            }
-
             Vec3 toMob = this.mob.position().subtract(target.position());
             double currentAngle = Math.atan2(toMob.z, toMob.x);
-            double desiredRadius = dist > 15.0D ? Math.max(9.5D, dist - 4.0D) : 8.5D;
+            double desiredRadius = dist > 15.0D ? Math.max(9.0D, dist - 4.0D) : 8.5D;
             double stepAngle = currentAngle + (this.mob.getOrbitDirection() * 0.55D);
 
             double goalX = target.getX() + Math.cos(stepAngle) * desiredRadius;
@@ -569,12 +714,18 @@ public class WhisperingDarkMod {
 
         @Override
         public boolean canUse() {
-            return this.whisperer.isRaging() && super.canUse();
+            return this.whisperer.isRaging()
+                    && !this.whisperer.isContorting()
+                    && !this.whisperer.isConvulsing()
+                    && super.canUse();
         }
 
         @Override
         public boolean canContinueToUse() {
-            return this.whisperer.isRaging() && super.canContinueToUse();
+            return this.whisperer.isRaging()
+                    && !this.whisperer.isContorting()
+                    && !this.whisperer.isConvulsing()
+                    && super.canContinueToUse();
         }
 
         @Override
@@ -718,44 +869,105 @@ public class WhisperingDarkMod {
 
             float glitchPulse = Mth.sin(ageInTicks * 2.1F) * Mth.cos(ageInTicks * 4.7F);
 
+            // 1. Анимация послеударных судорог / корчей (1-2 секунды форы)
+            if (entity.isConvulsing()) {
+                float spasmFast = Mth.sin(ageInTicks * 3.8F);
+                float spasmJerk = Mth.cos(ageInTicks * 5.4F);
+
+                this.pelvis.y = -3.2F + Mth.abs(spasmFast) * 0.9F;
+                this.pelvis.zRot = spasmJerk * 0.14F;
+
+                this.abdomen.xRot = 0.55F + spasmFast * 0.22F;
+                this.abdomen.zRot = spasmJerk * 0.25F;
+
+                this.thorax.xRot = 0.65F - spasmFast * 0.28F;
+                this.thorax.yRot = spasmJerk * 0.32F;
+                this.thorax.zRot = -spasmFast * 0.26F;
+
+                this.neckLower.xRot = 0.45F + spasmJerk * 0.35F;
+                this.neckUpper.zRot = spasmFast * 0.75F;
+                this.headHood.xRot = -0.55F + spasmFast * 0.45F;
+                this.headHood.zRot = -spasmJerk * 0.85F;
+
+                this.leftArmUpper.xRot = -0.95F + spasmFast * 0.55F;
+                this.rightArmUpper.xRot = -0.95F - spasmFast * 0.55F;
+                this.leftArmUpper.zRot = -0.45F + spasmJerk * 0.30F;
+                this.rightArmUpper.zRot = 0.45F - spasmJerk * 0.30F;
+
+                this.leftArmLower.xRot = -1.25F + spasmJerk * 0.50F;
+                this.rightArmLower.xRot = -1.25F - spasmJerk * 0.50F;
+
+                this.leftLegUpper.xRot = -0.15F + spasmFast * 0.12F;
+                this.rightLegUpper.xRot = 0.15F - spasmFast * 0.12F;
+                return;
+            }
+
+            // 2. Уникальная 5-секундная анимация выкручивания суставов и деформации при взгляде игрока
+            if (entity.isContorting()) {
+                float steppedTime = (float) Math.floor(ageInTicks * 0.55F) / 0.55F;
+                float snapWave = Mth.sin(steppedTime * 0.42F);
+                float violentTremor = Mth.sin(ageInTicks * 3.4F) * Mth.cos(ageInTicks * 6.1F);
+
+                this.pelvis.y = -3.5F + Mth.sin(ageInTicks * 0.35F) * 0.6F;
+                this.pelvis.zRot = snapWave * 0.12F;
+
+                // Нечеловеческий излом позвоночника назад и вбок
+                this.abdomen.xRot = -0.28F + Mth.sin(ageInTicks * 0.25F) * 0.32F;
+                this.abdomen.zRot = snapWave * 0.35F + violentTremor * 0.08F;
+
+                this.thorax.xRot = 0.48F + Mth.cos(ageInTicks * 0.30F) * 0.35F;
+                this.thorax.yRot = snapWave * 0.40F;
+                this.thorax.zRot = -snapWave * 0.42F + violentTremor * 0.12F;
+
+                // Выкручивание шеи и головы почти на 90 градусов с резкими рывками
+                this.neckLower.zRot = snapWave * 0.45F;
+                this.neckUpper.zRot = snapWave * 0.65F + violentTremor * 0.20F;
+                this.headHood.zRot = (snapWave > 0 ? 1.15F : -1.15F) + violentTremor * 0.28F;
+                this.headHood.xRot += -0.35F + violentTremor * 0.22F;
+
+                // Вывернутые плечевые и локтевые суставы
+                this.leftArmUpper.xRot = -1.65F + Mth.sin(steppedTime * 0.5F) * 0.75F + violentTremor * 0.20F;
+                this.rightArmUpper.xRot = -1.45F - Mth.sin(steppedTime * 0.5F) * 0.75F - violentTremor * 0.20F;
+                this.leftArmUpper.zRot = -0.68F - snapWave * 0.35F;
+                this.rightArmUpper.zRot = 0.68F - snapWave * 0.35F;
+
+                this.leftArmLower.xRot = -1.10F + Mth.cos(ageInTicks * 0.6F) * 0.65F;
+                this.rightArmLower.xRot = -1.10F - Mth.cos(ageInTicks * 0.6F) * 0.65F;
+                this.leftArmLower.zRot = 0.45F + violentTremor * 0.25F;
+                this.rightArmLower.zRot = -0.45F - violentTremor * 0.25F;
+                return;
+            }
+
+            // 3. Анимация стремительной погони (Raging)
             if (entity.isRaging()) {
                 float runCycle = limbSwing * 0.78F;
-                float runStride = Math.max(Mth.clamp(limbSwingAmount * 1.3F, 0.0F, 1.0F), 0.55F);
+                float runStride = Math.max(Mth.clamp(limbSwingAmount * 1.3F, 0.0F, 1.0F), 0.60F);
 
-                this.pelvis.y = -4.0F + Mth.abs(Mth.cos(runCycle * 2.0F)) * 1.8F * runStride;
-                this.pelvis.yRot = Mth.cos(runCycle) * 0.14F * runStride;
-                this.pelvis.zRot = Mth.sin(runCycle) * 0.06F * runStride;
+                this.pelvis.y = -4.0F + Mth.abs(Mth.cos(runCycle * 2.0F)) * 1.85F * runStride;
+                this.pelvis.yRot = Mth.cos(runCycle) * 0.15F * runStride;
+                this.pelvis.zRot = Mth.sin(runCycle) * 0.07F * runStride;
 
-                this.abdomen.xRot += 0.34F;
-                this.thorax.xRot += 0.42F + Mth.sin(runCycle * 2.0F) * 0.08F;
-                this.thorax.yRot += Mth.cos(runCycle) * 0.16F * runStride;
+                this.abdomen.xRot += 0.36F;
+                this.thorax.xRot += 0.44F + Mth.sin(runCycle * 2.0F) * 0.09F;
+                this.thorax.yRot += Mth.cos(runCycle) * 0.18F * runStride;
 
-                this.neckLower.xRot += 0.30F;
-                this.neckUpper.xRot += -0.42F;
-                this.headHood.zRot += Mth.sin(ageInTicks * 1.9F) * 0.28F + glitchPulse * 0.18F;
-                this.headHood.yRot += glitchPulse * 0.14F;
+                this.neckLower.xRot += 0.32F;
+                this.neckUpper.xRot += -0.44F;
+                this.headHood.zRot += Mth.sin(ageInTicks * 1.9F) * 0.30F + glitchPulse * 0.20F;
+                this.headHood.yRot += glitchPulse * 0.15F;
 
-                this.leftLegUpper.xRot = Mth.cos(runCycle) * 1.32F * runStride;
-                this.rightLegUpper.xRot = Mth.cos(runCycle + (float) Math.PI) * 1.32F * runStride;
+                this.leftLegUpper.xRot = Mth.cos(runCycle) * 1.38F * runStride;
+                this.rightLegUpper.xRot = Mth.cos(runCycle + (float) Math.PI) * 1.38F * runStride;
 
-                this.leftArmUpper.xRot = -1.35F + Mth.cos(runCycle + (float) Math.PI) * 0.88F * runStride;
-                this.rightArmUpper.xRot = -1.35F + Mth.cos(runCycle) * 0.88F * runStride;
-                this.leftArmUpper.zRot = -0.20F - Mth.abs(Mth.sin(runCycle)) * 0.15F;
-                this.rightArmUpper.zRot = 0.20F + Mth.abs(Mth.cos(runCycle)) * 0.15F;
+                this.leftArmUpper.xRot = -1.38F + Mth.cos(runCycle + (float) Math.PI) * 0.92F * runStride;
+                this.rightArmUpper.xRot = -1.38F + Mth.cos(runCycle) * 0.92F * runStride;
+                this.leftArmUpper.zRot = -0.22F - Mth.abs(Mth.sin(runCycle)) * 0.16F;
+                this.rightArmUpper.zRot = 0.22F + Mth.abs(Mth.cos(runCycle)) * 0.16F;
 
-                this.leftArmLower.xRot = -0.62F + Mth.sin(runCycle + (float) Math.PI) * 0.42F * runStride;
-                this.rightArmLower.xRot = -0.62F + Mth.sin(runCycle) * 0.42F * runStride;
-            } else if (entity.isFrozenByLook()) {
-                this.thorax.xRot += 0.18F;
-                this.neckUpper.zRot += -0.34F;
-                this.headHood.zRot += 0.42F + glitchPulse * 0.08F;
-                this.leftArmUpper.xRot = -0.28F;
-                this.rightArmUpper.xRot = -0.22F;
-                this.leftArmUpper.zRot = -0.14F;
-                this.rightArmUpper.zRot = 0.14F;
-                this.leftArmLower.xRot = -0.45F;
-                this.rightArmLower.xRot = -0.38F;
+                this.leftArmLower.xRot = -0.65F + Mth.sin(runCycle + (float) Math.PI) * 0.45F * runStride;
+                this.rightArmLower.xRot = -0.65F + Mth.sin(runCycle) * 0.45F * runStride;
             } else {
+                // 4. Анимация крадущегося преследования (Stalking Walk)
                 float walkCycle = limbSwing * 0.6662F;
                 float stride = Mth.clamp(limbSwingAmount * 1.15F, 0.0F, 1.0F);
 
@@ -763,21 +975,19 @@ public class WhisperingDarkMod {
                 this.pelvis.zRot = Mth.sin(walkCycle) * 0.055F * stride;
                 this.pelvis.yRot = Mth.cos(walkCycle) * 0.075F * stride;
 
-                float creepLean = entity.isCreeping() ? 0.22F : 0.10F;
-                this.abdomen.xRot += creepLean + 0.10F * stride;
-                this.thorax.xRot += creepLean + 0.16F * stride;
+                this.abdomen.xRot += 0.12F + 0.10F * stride;
+                this.thorax.xRot += 0.14F + 0.16F * stride;
                 this.thorax.zRot += Mth.cos(walkCycle) * 0.05F * stride;
 
-                float eerieHeadTilt = Mth.sin(ageInTicks * 0.045F) * 0.24F;
+                float eerieHeadTilt = Mth.sin(ageInTicks * 0.045F) * 0.26F;
                 this.neckUpper.zRot += eerieHeadTilt * 0.5F;
-                this.headHood.zRot += eerieHeadTilt + (glitchPulse > 0.72F ? 0.26F : 0.0F);
+                this.headHood.zRot += eerieHeadTilt + (glitchPulse > 0.72F ? 0.28F : 0.0F);
 
                 this.leftLegUpper.xRot = Mth.cos(walkCycle) * 0.88F * stride;
                 this.rightLegUpper.xRot = Mth.cos(walkCycle + (float) Math.PI) * 0.88F * stride;
 
-                float armBaseX = entity.isCreeping() ? -0.55F : -0.16F;
-                this.leftArmUpper.xRot = armBaseX + Mth.cos(walkCycle + (float) Math.PI) * 0.52F * stride;
-                this.rightArmUpper.xRot = armBaseX + Mth.cos(walkCycle) * 0.52F * stride;
+                this.leftArmUpper.xRot = -0.18F + Mth.cos(walkCycle + (float) Math.PI) * 0.52F * stride;
+                this.rightArmUpper.xRot = -0.18F + Mth.cos(walkCycle) * 0.52F * stride;
                 this.leftArmUpper.zRot = -0.10F - Mth.sin(ageInTicks * 0.06F) * 0.04F;
                 this.rightArmUpper.zRot = 0.10F + Mth.sin(ageInTicks * 0.06F) * 0.04F;
 
