@@ -13,14 +13,9 @@ import net.minecraft.client.model.geom.builders.CubeListBuilder;
 import net.minecraft.client.model.geom.builders.LayerDefinition;
 import net.minecraft.client.model.geom.builders.MeshDefinition;
 import net.minecraft.client.model.geom.builders.PartDefinition;
-import net.minecraft.client.renderer.MultiBufferSource;
-import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.entity.EntityRendererProvider;
 import net.minecraft.client.renderer.entity.MobRenderer;
-import net.minecraft.client.renderer.entity.RenderLayerParent;
-import net.minecraft.client.renderer.entity.layers.RenderLayer;
 import net.minecraft.client.renderer.texture.DynamicTexture;
-import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.network.syncher.EntityDataAccessor;
@@ -50,6 +45,8 @@ import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.entity.ai.goal.LookAtPlayerGoal;
 import net.minecraft.world.entity.ai.goal.MeleeAttackGoal;
 import net.minecraft.world.entity.ai.goal.RandomLookAroundGoal;
+import net.minecraft.world.entity.ai.goal.WaterAvoidingRandomStrollGoal;
+import net.minecraft.world.entity.ai.goal.target.HurtByTargetGoal;
 import net.minecraft.world.entity.ai.goal.target.NearestAttackableTargetGoal;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.entity.player.Player;
@@ -58,6 +55,8 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.ServerLevelAccessor;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.api.distmarker.Dist;
@@ -93,13 +92,13 @@ public class WhisperingDarkMod {
 
     public static final RegistryObject<EntityType<WhispererEntity>> WHISPERER =
             ENTITIES.register("whisperer", () -> EntityType.Builder.of(WhispererEntity::new, MobCategory.MONSTER)
-                    .sized(0.6F, 2.9F)
+                    .sized(0.65F, 2.85F)
                     .clientTrackingRange(64)
                     .build("whisperer"));
 
     public static final RegistryObject<Item> WHISPERER_SPAWN_EGG =
             ITEMS.register("whisperer_spawn_egg", () ->
-                    new ForgeSpawnEggItem(WHISPERER, 0x0A0A0E, 0x3E0A0A, new Item.Properties()));
+                    new ForgeSpawnEggItem(WHISPERER, 0x000000, 0x141414, new Item.Properties()));
 
     public static final RegistryObject<SoundEvent> WHISPER_AMBIENT =
             SOUNDS.register("whisper_ambient", () ->
@@ -151,19 +150,24 @@ public class WhisperingDarkMod {
     @SubscribeEvent
     public void onPlayerTick(TickEvent.PlayerTickEvent event) {
         if (event.phase != TickEvent.Phase.END || event.player.level().isClientSide) return;
-        if (event.player.tickCount % 200 != 0) return;
+        if (event.player.tickCount % 180 != 0) return;
 
         Player player = event.player;
+        if (player.isCreative() || player.isSpectator()) return;
         Level level = player.level();
-        if (level.getSkyDarken() < 8 && !level.isThundering()) return;
+        if (level.getSkyDarken() < 7 && !level.isThundering() && player.getY() > 52.0D) return;
 
         BlockPos ppos = player.blockPosition();
-        if (level.getBrightness(LightLayer.BLOCK, ppos) > 0) return;
+        if (level.getBrightness(LightLayer.BLOCK, ppos) > 2) return;
 
-        if (level.random.nextFloat() < 0.15F) {
+        if (!level.getEntitiesOfClass(WhispererEntity.class, player.getBoundingBox().inflate(48.0D)).isEmpty()) {
+            return;
+        }
+
+        if (level.random.nextFloat() < 0.22F) {
             Vec3 look = player.getLookAngle();
-            double dist = 16.0 + level.random.nextDouble() * 12.0;
-            double angle = (level.random.nextDouble() - 0.5) * 1.2;
+            double dist = 16.0D + level.random.nextDouble() * 12.0D;
+            double angle = (level.random.nextDouble() - 0.5D) * 1.4D;
             double cos = Math.cos(angle);
             double sin = Math.sin(angle);
             double rx = look.x * cos - look.z * sin;
@@ -171,21 +175,24 @@ public class WhisperingDarkMod {
 
             BlockPos spawnPos = BlockPos.containing(player.getX() - rx * dist, player.getY(), player.getZ() - rz * dist);
             BlockPos valid = findGround(level, spawnPos);
-            if (valid != null && level.getBrightness(LightLayer.BLOCK, valid) == 0) {
+            if (valid != null && level.getBrightness(LightLayer.BLOCK, valid) <= 2) {
                 WhispererEntity entity = WHISPERER.get().create(level);
                 if (entity != null) {
-                    entity.moveTo(valid.getX() + 0.5, valid.getY(), valid.getZ() + 0.5,
+                    entity.moveTo(valid.getX() + 0.5D, valid.getY(), valid.getZ() + 0.5D,
                             level.random.nextFloat() * 360.0F, 0.0F);
+                    entity.setTarget(player);
                     level.addFreshEntity(entity);
                 }
             }
         }
     }
 
-    private BlockPos findGround(Level level, BlockPos pos) {
-        for (int dy = -3; dy <= 3; dy++) {
+    private static BlockPos findGround(Level level, BlockPos pos) {
+        for (int dy = -4; dy <= 4; dy++) {
             BlockPos p = pos.above(dy);
-            if (level.getBlockState(p).isAir() && level.getBlockState(p.above()).isAir()
+            if (level.getBlockState(p).isAir()
+                    && level.getBlockState(p.above()).isAir()
+                    && level.getBlockState(p.above(2)).isAir()
                     && level.getBlockState(p.below()).isSolidRender(level, p.below())) {
                 return p;
             }
@@ -198,13 +205,20 @@ public class WhisperingDarkMod {
                 SynchedEntityData.defineId(WhispererEntity.class, EntityDataSerializers.BOOLEAN);
         private static final EntityDataAccessor<Boolean> FROZEN =
                 SynchedEntityData.defineId(WhispererEntity.class, EntityDataSerializers.BOOLEAN);
+        private static final EntityDataAccessor<Boolean> CREEPING =
+                SynchedEntityData.defineId(WhispererEntity.class, EntityDataSerializers.BOOLEAN);
 
-        private int stalkTimer = 0;
-        private int lookAwayTimer = 0;
+        private int directLookTicks = 0;
+        private int unseenStalkTicks = 0;
+        private int rageDurationTicks = 0;
+        private int orbitSwitchCooldown = 0;
+        private int orbitDirection = 1;
+        private int shadowStepCooldown = 0;
 
         public WhispererEntity(EntityType<? extends Monster> type, Level level) {
             super(type, level);
-            this.setMaxUpStep(1.0F);
+            this.setMaxUpStep(1.25F);
+            this.xpReward = 35;
         }
 
         @Override
@@ -212,31 +226,47 @@ public class WhisperingDarkMod {
             super.defineSynchedData();
             this.entityData.define(RAGING, false);
             this.entityData.define(FROZEN, false);
+            this.entityData.define(CREEPING, false);
         }
 
         public static AttributeSupplier.Builder createAttributes() {
             return Monster.createMonsterAttributes()
-                    .add(Attributes.MAX_HEALTH, 60.0D)
-                    .add(Attributes.MOVEMENT_SPEED, 0.23D)
-                    .add(Attributes.ATTACK_DAMAGE, 12.0D)
-                    .add(Attributes.FOLLOW_RANGE, 40.0D)
-                    .add(Attributes.KNOCKBACK_RESISTANCE, 0.5D);
+                    .add(Attributes.MAX_HEALTH, 70.0D)
+                    .add(Attributes.MOVEMENT_SPEED, 0.25D)
+                    .add(Attributes.ATTACK_DAMAGE, 10.0D)
+                    .add(Attributes.FOLLOW_RANGE, 56.0D)
+                    .add(Attributes.KNOCKBACK_RESISTANCE, 0.75D);
         }
 
         public boolean isRaging() { return this.entityData.get(RAGING); }
         public void setRaging(boolean v) { this.entityData.set(RAGING, v); }
         public boolean isFrozenByLook() { return this.entityData.get(FROZEN); }
         public void setFrozenByLook(boolean v) { this.entityData.set(FROZEN, v); }
+        public boolean isCreeping() { return this.entityData.get(CREEPING); }
+        public void setCreeping(boolean v) { this.entityData.set(CREEPING, v); }
+        public int getOrbitDirection() { return this.orbitDirection; }
 
         @Override
         protected void registerGoals() {
             this.goalSelector.addGoal(0, new FloatGoal(this));
-            this.goalSelector.addGoal(1, new WhispererChaseGoal(this, 1.8D, true));
-            this.goalSelector.addGoal(2, new SilentStalkGoal(this, 1.0D, 3.0F, 32.0F));
-            this.goalSelector.addGoal(3, new LookAtPlayerGoal(this, Player.class, 32.0F));
-            this.goalSelector.addGoal(4, new RandomLookAroundGoal(this));
+            this.goalSelector.addGoal(1, new WhispererChaseGoal(this, 1.32D, true));
+            this.goalSelector.addGoal(2, new FlankingStalkGoal(this));
+            this.goalSelector.addGoal(3, new WaterAvoidingRandomStrollGoal(this, 0.85D));
+            this.goalSelector.addGoal(4, new LookAtPlayerGoal(this, Player.class, 48.0F));
+            this.goalSelector.addGoal(5, new RandomLookAroundGoal(this));
 
-            this.targetSelector.addGoal(1, new NearestAttackableTargetGoal<>(this, Player.class, true));
+            this.targetSelector.addGoal(1, new HurtByTargetGoal(this));
+            this.targetSelector.addGoal(2, new NearestAttackableTargetGoal<>(this, Player.class, false));
+        }
+
+        @Override
+        public boolean hurt(DamageSource source, float amount) {
+            boolean res = super.hurt(source, amount);
+            if (!this.level().isClientSide && source.getEntity() instanceof Player player && !this.isRaging()) {
+                this.setTarget(player);
+                this.triggerRage(player);
+            }
+            return res;
         }
 
         @Override
@@ -244,66 +274,189 @@ public class WhisperingDarkMod {
             super.tick();
 
             if (this.level().isClientSide) {
-                if (this.random.nextFloat() < (isRaging() ? 0.6F : 0.15F)) {
-                    double rx = this.getX() + (this.random.nextDouble() - 0.5) * 0.8;
-                    double ry = this.getY() + this.random.nextDouble() * 2.8;
-                    double rz = this.getZ() + (this.random.nextDouble() - 0.5) * 0.8;
+                if (this.random.nextFloat() < (this.isRaging() ? 0.55F : 0.18F)) {
+                    double rx = this.getX() + (this.random.nextDouble() - 0.5D) * 0.7D;
+                    double ry = this.getY() + this.random.nextDouble() * 2.7D;
+                    double rz = this.getZ() + (this.random.nextDouble() - 0.5D) * 0.7D;
                     this.level().addParticle(ParticleTypes.SMOKE, rx, ry, rz, 0.0D, 0.01D, 0.0D);
                 }
                 return;
             }
 
+            if (this.shadowStepCooldown > 0) this.shadowStepCooldown--;
+            if (this.orbitSwitchCooldown > 0) this.orbitSwitchCooldown--;
+
             BlockPos currentPos = this.blockPosition();
-            if (this.level().getBrightness(LightLayer.BLOCK, currentPos) > 7) {
-                vanishWithSound();
+            if (!this.isRaging() && this.level().getBrightness(LightLayer.BLOCK, currentPos) > 11) {
+                this.vanishWithSound();
                 return;
             }
 
-            LivingEntity target = this.getTarget();
-            if (target instanceof Player player) {
-                boolean targetLooking = isPlayerLookingAtMe(player);
-
-                if (targetLooking) {
-                    this.lookAwayTimer = 0;
-                    this.stalkTimer++;
-                    this.setFrozenByLook(true);
-                    this.getNavigation().stop();
-
-                    if (this.stalkTimer > 60 && !isRaging()) {
-                        triggerRage(player);
-                    }
+            LivingEntity rawTarget = this.getTarget();
+            if (!(rawTarget instanceof Player player) || !player.isAlive() || player.isCreative() || player.isSpectator()) {
+                Player nearest = this.level().getNearestPlayer(this, 42.0D);
+                if (nearest != null && !nearest.isCreative() && !nearest.isSpectator()) {
+                    this.setTarget(nearest);
+                    player = nearest;
                 } else {
                     this.setFrozenByLook(false);
-                    if (!isRaging()) {
-                        this.lookAwayTimer++;
-                        if (this.lookAwayTimer > 100) {
-                            vanishWithSound();
-                            return;
-                        }
+                    this.setCreeping(false);
+                    return;
+                }
+            }
+
+            double dist = this.distanceTo(player);
+
+            int hbInterval = Mth.clamp((int) (dist * 1.6D), 14, 45);
+            if (dist < 28.0D && this.tickCount % hbInterval == 0) {
+                float vol = (float) Mth.clamp(1.2D - (dist / 30.0D), 0.25D, 1.0D);
+                this.level().playSound(null, player.blockPosition(),
+                        SoundEvents.WARDEN_HEARTBEAT, SoundSource.HOSTILE, vol, 0.55F);
+            }
+
+            if (this.isRaging()) {
+                this.setFrozenByLook(false);
+                this.setCreeping(false);
+                this.rageDurationTicks++;
+
+                if (this.tickCount % 7 == 0 && this.getDeltaMovement().horizontalDistanceSqr() > 0.002D) {
+                    this.level().playSound(null, this.blockPosition(),
+                            SoundEvents.WARDEN_STEP, SoundSource.HOSTILE, 0.9F, 0.65F + this.random.nextFloat() * 0.25F);
+                    this.level().playSound(null, this.blockPosition(),
+                            SoundEvents.BONE_BLOCK_BREAK, SoundSource.HOSTILE, 0.65F, 0.55F + this.random.nextFloat() * 0.35F);
+                }
+
+                if (dist < 14.0D && this.tickCount % 60 == 0) {
+                    player.addEffect(new MobEffectInstance(MobEffects.DARKNESS, 90, 0, false, false));
+                }
+
+                if (this.tickCount % 15 == 0) {
+                    extinguishNearbyTorches();
+                }
+
+                if (this.rageDurationTicks > 600 || dist > 52.0D) {
+                    this.vanishWithSound();
+                }
+                return;
+            }
+
+            boolean playerLooking = isPlayerLookingAtMe(player, 0.80D);
+            boolean inPeripheral = !playerLooking && isPlayerLookingAtMe(player, 0.25D);
+
+            if (dist < 6.5D) {
+                this.triggerRage(player);
+                return;
+            }
+
+            if (playerLooking) {
+                this.unseenStalkTicks = 0;
+                this.directLookTicks++;
+
+                if (this.directLookTicks <= 24) {
+                    this.setFrozenByLook(true);
+                    this.setCreeping(false);
+                    this.getNavigation().stop();
+                } else if (this.directLookTicks <= 55) {
+                    this.setFrozenByLook(false);
+                    this.setCreeping(true);
+                    if (this.directLookTicks == 25) {
+                        this.level().playSound(null, player.blockPosition(),
+                                SoundEvents.SCULK_SHRIEKER_SHRIEK, SoundSource.HOSTILE, 0.45F, 0.5F);
                     }
+                } else {
+                    this.triggerRage(player);
                 }
             } else {
                 this.setFrozenByLook(false);
+                this.setCreeping(false);
+                if (this.directLookTicks > 0) {
+                    this.directLookTicks = Math.max(0, this.directLookTicks - 1);
+                }
+                this.unseenStalkTicks++;
+
+                if (this.orbitSwitchCooldown == 0 && (inPeripheral || this.random.nextFloat() < 0.02F)) {
+                    this.orbitDirection = -this.orbitDirection;
+                    this.orbitSwitchCooldown = 60 + this.random.nextInt(60);
+                }
+
+                if (dist < 24.0D && this.unseenStalkTicks % 85 == 0) {
+                    Vec3 look = player.getLookAngle();
+                    BlockPos phantomPos = BlockPos.containing(
+                            player.getX() - look.x * 2.5D,
+                            player.getY() + 1.2D,
+                            player.getZ() - look.z * 2.5D
+                    );
+                    this.level().playSound(null, phantomPos,
+                            SoundEvents.BONE_BLOCK_STEP, SoundSource.AMBIENT, 0.85F, 0.55F + this.random.nextFloat() * 0.2F);
+                }
+
+                if (dist > 28.0D && this.shadowStepCooldown == 0 && this.unseenStalkTicks > 80) {
+                    tryShadowStepBehind(player, 14.0D);
+                }
+
+                if (this.unseenStalkTicks > 900) {
+                    this.vanishWithSound();
+                }
             }
         }
 
-        private boolean isPlayerLookingAtMe(Player player) {
+        private void extinguishNearbyTorches() {
+            BlockPos center = this.blockPosition();
+            for (BlockPos pos : BlockPos.betweenClosed(center.offset(-3, -1, -3), center.offset(3, 2, 3))) {
+                BlockState state = this.level().getBlockState(pos);
+                if (state.is(Blocks.TORCH) || state.is(Blocks.WALL_TORCH)) {
+                    this.level().destroyBlock(pos, true);
+                    break;
+                }
+            }
+        }
+
+        private void tryShadowStepBehind(Player player, double targetDist) {
+            Vec3 look = player.getLookAngle();
+            double angle = (this.random.nextDouble() - 0.5D) * 1.1D;
+            double cos = Math.cos(angle);
+            double sin = Math.sin(angle);
+            double rx = look.x * cos - look.z * sin;
+            double rz = look.x * sin + look.z * cos;
+
+            BlockPos candidate = BlockPos.containing(
+                    player.getX() - rx * targetDist,
+                    player.getY(),
+                    player.getZ() - rz * targetDist
+            );
+            BlockPos ground = findGround(this.level(), candidate);
+            if (ground != null && this.level().getBrightness(LightLayer.BLOCK, ground) <= 5) {
+                this.teleportTo(ground.getX() + 0.5D, ground.getY(), ground.getZ() + 0.5D);
+                this.shadowStepCooldown = 140;
+                this.level().playSound(null, ground, SoundEvents.ENDERMAN_TELEPORT, SoundSource.HOSTILE, 0.35F, 0.5F);
+            }
+        }
+
+        private boolean isPlayerLookingAtMe(Player player, double threshold) {
             Vec3 viewVec = player.getViewVector(1.0F).normalize();
             Vec3 toEntity = this.getEyePosition().subtract(player.getEyePosition()).normalize();
             double dot = viewVec.dot(toEntity);
-            if (dot < 0.75D) return false;
+            if (dot < threshold) return false;
             return player.hasLineOfSight(this);
         }
 
-        private void triggerRage(Player player) {
+        public void triggerRage(Player player) {
+            if (this.isRaging()) return;
             this.setRaging(true);
+            this.setFrozenByLook(false);
+            this.setCreeping(false);
+            this.rageDurationTicks = 0;
+
             AttributeInstance speedAttr = this.getAttribute(Attributes.MOVEMENT_SPEED);
             if (speedAttr != null) {
-                speedAttr.setBaseValue(0.42D);
+                speedAttr.setBaseValue(0.32D);
             }
-            player.addEffect(new MobEffectInstance(MobEffects.DARKNESS, 100, 0, false, false));
+
+            player.addEffect(new MobEffectInstance(MobEffects.DARKNESS, 120, 0, false, false));
             this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
-                    WHISPER_SCREAM.get(), SoundSource.HOSTILE, 2.0F, 0.8F + this.random.nextFloat() * 0.3F);
+                    WHISPER_SCREAM.get(), SoundSource.HOSTILE, 2.0F, 0.75F + this.random.nextFloat() * 0.2F);
+            this.level().playSound(null, this.blockPosition(),
+                    SoundEvents.WARDEN_ROAR, SoundSource.HOSTILE, 1.2F, 0.6F);
 
             if (player instanceof ServerPlayer sp) {
                 sp.playNotifySound(SoundEvents.ENDERMAN_SCREAM, SoundSource.HOSTILE, 1.0F, 0.5F);
@@ -312,10 +465,10 @@ public class WhisperingDarkMod {
 
         private void vanishWithSound() {
             this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
-                    WHISPER_DISAPPEAR.get(), SoundSource.HOSTILE, 1.0F, 1.0F);
+                    WHISPER_DISAPPEAR.get(), SoundSource.HOSTILE, 1.0F, 0.7F);
             if (this.level() instanceof ServerLevel sl) {
-                sl.sendParticles(ParticleTypes.LARGE_SMOKE, this.getX(), this.getY() + 1.5, this.getZ(),
-                        30, 0.4, 1.0, 0.4, 0.05);
+                sl.sendParticles(ParticleTypes.LARGE_SMOKE, this.getX(), this.getY() + 1.4D, this.getZ(),
+                        35, 0.35D, 0.9D, 0.35D, 0.03D);
             }
             this.discard();
         }
@@ -327,7 +480,7 @@ public class WhisperingDarkMod {
 
         @Override
         protected SoundEvent getHurtSound(DamageSource ds) {
-            return SoundEvents.ENDERMAN_HURT;
+            return SoundEvents.WARDEN_HURT;
         }
 
         @Override
@@ -337,56 +490,96 @@ public class WhisperingDarkMod {
 
         public static boolean checkWhispererSpawnRules(EntityType<WhispererEntity> type, ServerLevelAccessor level,
                                                       MobSpawnType spawnType, BlockPos pos, RandomSource random) {
-            if (level.getBrightness(LightLayer.BLOCK, pos) > 0) return false;
+            if (level.getBrightness(LightLayer.BLOCK, pos) > 2) return false;
             return Monster.checkMonsterSpawnRules(type, level, spawnType, pos, random);
         }
     }
 
-    private static class SilentStalkGoal extends Goal {
+    private static class FlankingStalkGoal extends Goal {
         private final WhispererEntity mob;
-        private final double speed;
-        private final float minDist;
-        private final float maxDist;
+        private int repathCooldown = 0;
 
-        public SilentStalkGoal(WhispererEntity mob, double speed, float minDist, float maxDist) {
+        public FlankingStalkGoal(WhispererEntity mob) {
             this.mob = mob;
-            this.speed = speed;
-            this.minDist = minDist;
-            this.maxDist = maxDist;
             this.setFlags(EnumSet.of(Flag.MOVE, Flag.LOOK));
         }
 
         @Override
         public boolean canUse() {
             LivingEntity t = this.mob.getTarget();
-            if (t == null || !t.isAlive() || this.mob.isRaging() || this.mob.isFrozenByLook()) return false;
-            double d = this.mob.distanceTo(t);
-            return d > this.minDist && d <= this.maxDist * 1.5D;
+            return t != null && t.isAlive() && !this.mob.isRaging();
+        }
+
+        @Override
+        public boolean canContinueToUse() {
+            LivingEntity t = this.mob.getTarget();
+            return t != null && t.isAlive() && !this.mob.isRaging();
+        }
+
+        @Override
+        public void start() {
+            this.repathCooldown = 0;
         }
 
         @Override
         public void tick() {
-            LivingEntity t = this.mob.getTarget();
-            if (t == null) return;
-            this.mob.getLookControl().setLookAt(t, 30.0F, 30.0F);
-            if (this.mob.distanceTo(t) > this.minDist) this.mob.getNavigation().moveTo(t, this.speed);
-            else this.mob.getNavigation().stop();
+            LivingEntity target = this.mob.getTarget();
+            if (target == null) return;
+
+            this.mob.getLookControl().setLookAt(target, 35.0F, 35.0F);
+
+            if (this.mob.isFrozenByLook()) {
+                this.mob.getNavigation().stop();
+                return;
+            }
+
+            if (--this.repathCooldown > 0) return;
+            this.repathCooldown = 8;
+
+            double dist = this.mob.distanceTo(target);
+
+            if (this.mob.isCreeping()) {
+                this.mob.getNavigation().moveTo(target, 0.78D);
+                return;
+            }
+
+            Vec3 toMob = this.mob.position().subtract(target.position());
+            double currentAngle = Math.atan2(toMob.z, toMob.x);
+            double desiredRadius = dist > 15.0D ? Math.max(9.5D, dist - 4.0D) : 8.5D;
+            double stepAngle = currentAngle + (this.mob.getOrbitDirection() * 0.55D);
+
+            double goalX = target.getX() + Math.cos(stepAngle) * desiredRadius;
+            double goalZ = target.getZ() + Math.sin(stepAngle) * desiredRadius;
+            double speed = dist > 18.0D ? 1.12D : 0.95D;
+
+            if (!this.mob.getNavigation().moveTo(goalX, target.getY(), goalZ, speed)) {
+                this.mob.getNavigation().moveTo(target, 0.95D);
+            }
         }
     }
 
     private static class WhispererChaseGoal extends MeleeAttackGoal {
         private final WhispererEntity whisperer;
 
-        public WhispererChaseGoal(WhispererEntity mob, double speed, boolean followUnseen) {
-            super(mob, speed, followUnseen);
+        public WhispererChaseGoal(WhispererEntity mob, double speedModifier, boolean followUnseen) {
+            super(mob, speedModifier, followUnseen);
             this.whisperer = mob;
         }
 
         @Override
-        public boolean canUse() { return this.whisperer.isRaging() && super.canUse(); }
+        public boolean canUse() {
+            return this.whisperer.isRaging() && super.canUse();
+        }
 
         @Override
-        public boolean canContinueToUse() { return this.whisperer.isRaging() && super.canContinueToUse(); }
+        public boolean canContinueToUse() {
+            return this.whisperer.isRaging() && super.canContinueToUse();
+        }
+
+        @Override
+        protected double getAttackReachSqr(LivingEntity attackTarget) {
+            return 4.5D + attackTarget.getBbWidth();
+        }
     }
 
     @Mod.EventBusSubscriber(modid = MODID, bus = Mod.EventBusSubscriber.Bus.MOD, value = Dist.CLIENT)
@@ -408,7 +601,11 @@ public class WhisperingDarkMod {
     @OnlyIn(Dist.CLIENT)
     public static class WhispererModel extends HierarchicalModel<WhispererEntity> {
         private final ModelPart root;
+        private final ModelPart pelvis;
+        private final ModelPart abdomen;
         private final ModelPart thorax;
+        private final ModelPart neckLower;
+        private final ModelPart neckUpper;
         private final ModelPart headHood;
         private final ModelPart leftArmUpper;
         private final ModelPart leftArmLower;
@@ -419,18 +616,18 @@ public class WhisperingDarkMod {
 
         public WhispererModel(ModelPart root) {
             this.root = root;
-            ModelPart pelvis = root.getChild("pelvis");
-            ModelPart abdomen = pelvis.getChild("abdomen");
-            this.thorax = abdomen.getChild("thorax");
-            ModelPart neckLower = this.thorax.getChild("neck_lower");
-            ModelPart neckUpper = neckLower.getChild("neck_upper");
-            this.headHood = neckUpper.getChild("head_hood");
+            this.pelvis = root.getChild("pelvis");
+            this.abdomen = this.pelvis.getChild("abdomen");
+            this.thorax = this.abdomen.getChild("thorax");
+            this.neckLower = this.thorax.getChild("neck_lower");
+            this.neckUpper = this.neckLower.getChild("neck_upper");
+            this.headHood = this.neckUpper.getChild("head_hood");
             this.leftArmUpper = this.thorax.getChild("left_arm_upper");
             this.leftArmLower = this.leftArmUpper.getChild("left_arm_lower");
             this.rightArmUpper = this.thorax.getChild("right_arm_upper");
             this.rightArmLower = this.rightArmUpper.getChild("right_arm_lower");
-            this.leftLegUpper = pelvis.getChild("left_leg_upper");
-            this.rightLegUpper = pelvis.getChild("right_leg_upper");
+            this.leftLegUpper = this.pelvis.getChild("left_leg_upper");
+            this.rightLegUpper = this.pelvis.getChild("right_leg_upper");
         }
 
         public static LayerDefinition createBodyLayer() {
@@ -438,8 +635,8 @@ public class WhisperingDarkMod {
             PartDefinition root = mesh.getRoot();
 
             PartDefinition pelvis = root.addOrReplaceChild("pelvis",
-                    CubeListBuilder.create().texOffs(0, 36).addBox(-3.0F, -1.5F, -2.0F, 7.0F, 4.0F, 4.0F),
-                    PartPose.offset(0.0F, -2.0F, 0.0F));
+                    CubeListBuilder.create().texOffs(0, 36).addBox(-3.5F, -2.0F, -2.0F, 7.0F, 4.0F, 4.0F),
+                    PartPose.offset(0.0F, -4.0F, 0.0F));
 
             PartDefinition abdomen = pelvis.addOrReplaceChild("abdomen",
                     CubeListBuilder.create().texOffs(22, 36).addBox(-3.0F, -8.0F, -1.75F, 6.0F, 8.0F, 3.5F, new CubeDeformation(-0.15F)),
@@ -473,7 +670,7 @@ public class WhisperingDarkMod {
                     CubeListBuilder.create()
                             .texOffs(12, 44).addBox(-1.25F, 0.0F, -1.25F, 2.5F, 15.0F, 2.5F, new CubeDeformation(-0.2F))
                             .texOffs(22, 48).addBox(-1.0F, 14.5F, -1.0F, 2.0F, 7.0F, 2.0F, new CubeDeformation(-0.25F)),
-                    PartPose.offsetAndRotation(1.0F, 13.5F, 0.0F, -0.14F, 0.0F, 0.0F));
+                    PartPose.offsetAndRotation(1.0F, 13.5F, 0.0F, -0.22F, 0.0F, 0.0F));
 
             PartDefinition rightArmUpper = thorax.addOrReplaceChild("right_arm_upper",
                     CubeListBuilder.create().texOffs(30, 44).addBox(-2.5F, 0.0F, -1.5F, 3.0F, 14.0F, 3.0F, new CubeDeformation(-0.15F)),
@@ -483,7 +680,7 @@ public class WhisperingDarkMod {
                     CubeListBuilder.create()
                             .texOffs(42, 44).addBox(-1.25F, 0.0F, -1.25F, 2.5F, 15.0F, 2.5F, new CubeDeformation(-0.2F))
                             .texOffs(52, 48).addBox(-1.0F, 14.5F, -1.0F, 2.0F, 7.0F, 2.0F, new CubeDeformation(-0.25F)),
-                    PartPose.offsetAndRotation(-1.0F, 13.5F, 0.0F, -0.14F, 0.0F, 0.0F));
+                    PartPose.offsetAndRotation(-1.0F, 13.5F, 0.0F, -0.22F, 0.0F, 0.0F));
 
             pelvis.addOrReplaceChild("left_leg_upper",
                     CubeListBuilder.create().texOffs(0, 62).addBox(-1.5F, 0.0F, -1.5F, 3.0F, 26.0F, 3.0F, new CubeDeformation(-0.1F)),
@@ -500,91 +697,135 @@ public class WhisperingDarkMod {
         public ModelPart root() { return this.root; }
 
         @Override
-        public void setupAnim(WhispererEntity entity, float limbSwing, float limbSwingAmount, float ageInTicks, float netHeadYaw, float headPitch) {
+        public void setupAnim(WhispererEntity entity, float limbSwing, float limbSwingAmount,
+                              float ageInTicks, float netHeadYaw, float headPitch) {
             this.root().getAllParts().forEach(ModelPart::resetPose);
 
-            float qT = (float) Math.floor(ageInTicks * 0.6F) / 0.6F;
-            float sn = Mth.sin(ageInTicks * 3.1F) * Mth.cos(ageInTicks * 5.3F);
+            float yawRad = netHeadYaw * ((float) Math.PI / 180.0F);
+            float pitchRad = headPitch * ((float) Math.PI / 180.0F);
 
-            if (sn > 0.6F) {
-                float jX = (Mth.sin(qT * 17.0F) * 0.12F);
-                float jZ = (Mth.cos(qT * 23.0F) * 0.12F);
-                this.headHood.x += jX;
-                this.headHood.z += jZ;
-            }
+            float breath = Mth.sin(ageInTicks * 0.08F);
+            this.abdomen.xRot += breath * 0.035F;
+            this.thorax.xRot += breath * 0.055F;
+
+            this.neckLower.yRot += yawRad * 0.25F;
+            this.neckUpper.yRot += yawRad * 0.35F;
+            this.headHood.yRot += yawRad * 0.40F;
+
+            this.neckLower.xRot += pitchRad * 0.30F;
+            this.headHood.xRot += pitchRad * 0.70F;
+
+            float glitchPulse = Mth.sin(ageInTicks * 2.1F) * Mth.cos(ageInTicks * 4.7F);
 
             if (entity.isRaging()) {
-                float shake = Mth.sin(ageInTicks * 1.8F) * 0.08F;
-                this.thorax.xRot += 0.3F + shake;
-                this.leftArmUpper.xRot = -1.2F + Mth.sin(limbSwing * 0.6662F) * 0.4F;
-                this.rightArmUpper.xRot = -1.2F - Mth.sin(limbSwing * 0.6662F) * 0.4F;
+                float runCycle = limbSwing * 0.78F;
+                float runStride = Math.max(Mth.clamp(limbSwingAmount * 1.3F, 0.0F, 1.0F), 0.55F);
+
+                this.pelvis.y = -4.0F + Mth.abs(Mth.cos(runCycle * 2.0F)) * 1.8F * runStride;
+                this.pelvis.yRot = Mth.cos(runCycle) * 0.14F * runStride;
+                this.pelvis.zRot = Mth.sin(runCycle) * 0.06F * runStride;
+
+                this.abdomen.xRot += 0.34F;
+                this.thorax.xRot += 0.42F + Mth.sin(runCycle * 2.0F) * 0.08F;
+                this.thorax.yRot += Mth.cos(runCycle) * 0.16F * runStride;
+
+                this.neckLower.xRot += 0.30F;
+                this.neckUpper.xRot += -0.42F;
+                this.headHood.zRot += Mth.sin(ageInTicks * 1.9F) * 0.28F + glitchPulse * 0.18F;
+                this.headHood.yRot += glitchPulse * 0.14F;
+
+                this.leftLegUpper.xRot = Mth.cos(runCycle) * 1.32F * runStride;
+                this.rightLegUpper.xRot = Mth.cos(runCycle + (float) Math.PI) * 1.32F * runStride;
+
+                this.leftArmUpper.xRot = -1.35F + Mth.cos(runCycle + (float) Math.PI) * 0.88F * runStride;
+                this.rightArmUpper.xRot = -1.35F + Mth.cos(runCycle) * 0.88F * runStride;
+                this.leftArmUpper.zRot = -0.20F - Mth.abs(Mth.sin(runCycle)) * 0.15F;
+                this.rightArmUpper.zRot = 0.20F + Mth.abs(Mth.cos(runCycle)) * 0.15F;
+
+                this.leftArmLower.xRot = -0.62F + Mth.sin(runCycle + (float) Math.PI) * 0.42F * runStride;
+                this.rightArmLower.xRot = -0.62F + Mth.sin(runCycle) * 0.42F * runStride;
             } else if (entity.isFrozenByLook()) {
-                this.thorax.xRot = 0.1F;
-                this.leftArmUpper.zRot = -0.05F;
-                this.rightArmUpper.zRot = 0.05F;
+                this.thorax.xRot += 0.18F;
+                this.neckUpper.zRot += -0.34F;
+                this.headHood.zRot += 0.42F + glitchPulse * 0.08F;
+                this.leftArmUpper.xRot = -0.28F;
+                this.rightArmUpper.xRot = -0.22F;
+                this.leftArmUpper.zRot = -0.14F;
+                this.rightArmUpper.zRot = 0.14F;
+                this.leftArmLower.xRot = -0.45F;
+                this.rightArmLower.xRot = -0.38F;
             } else {
-                this.leftArmUpper.xRot = Mth.cos(limbSwing * 0.6662F) * 0.2F * limbSwingAmount;
-                this.rightArmUpper.xRot = Mth.cos(limbSwing * 0.6662F + (float)Math.PI) * 0.2F * limbSwingAmount;
-                this.leftLegUpper.xRot = Mth.cos(limbSwing * 0.6662F + (float)Math.PI) * 0.4F * limbSwingAmount;
-                this.rightLegUpper.xRot = Mth.cos(limbSwing * 0.6662F) * 0.4F * limbSwingAmount;
+                float walkCycle = limbSwing * 0.6662F;
+                float stride = Mth.clamp(limbSwingAmount * 1.15F, 0.0F, 1.0F);
+
+                this.pelvis.y = -4.0F + Mth.abs(Mth.sin(walkCycle)) * 1.25F * stride;
+                this.pelvis.zRot = Mth.sin(walkCycle) * 0.055F * stride;
+                this.pelvis.yRot = Mth.cos(walkCycle) * 0.075F * stride;
+
+                float creepLean = entity.isCreeping() ? 0.22F : 0.10F;
+                this.abdomen.xRot += creepLean + 0.10F * stride;
+                this.thorax.xRot += creepLean + 0.16F * stride;
+                this.thorax.zRot += Mth.cos(walkCycle) * 0.05F * stride;
+
+                float eerieHeadTilt = Mth.sin(ageInTicks * 0.045F) * 0.24F;
+                this.neckUpper.zRot += eerieHeadTilt * 0.5F;
+                this.headHood.zRot += eerieHeadTilt + (glitchPulse > 0.72F ? 0.26F : 0.0F);
+
+                this.leftLegUpper.xRot = Mth.cos(walkCycle) * 0.88F * stride;
+                this.rightLegUpper.xRot = Mth.cos(walkCycle + (float) Math.PI) * 0.88F * stride;
+
+                float armBaseX = entity.isCreeping() ? -0.55F : -0.16F;
+                this.leftArmUpper.xRot = armBaseX + Mth.cos(walkCycle + (float) Math.PI) * 0.52F * stride;
+                this.rightArmUpper.xRot = armBaseX + Mth.cos(walkCycle) * 0.52F * stride;
+                this.leftArmUpper.zRot = -0.10F - Mth.sin(ageInTicks * 0.06F) * 0.04F;
+                this.rightArmUpper.zRot = 0.10F + Mth.sin(ageInTicks * 0.06F) * 0.04F;
+
+                this.leftArmLower.xRot = -0.35F + Mth.sin(walkCycle + (float) Math.PI) * 0.32F * stride;
+                this.rightArmLower.xRot = -0.35F + Mth.sin(walkCycle) * 0.32F * stride;
             }
+
+            if (this.attackTime > 0.0F) {
+                float swing = Mth.sin(this.attackTime * (float) Math.PI);
+                this.thorax.xRot += swing * 0.35F;
+                this.leftArmUpper.xRot -= swing * 1.15F;
+                this.rightArmUpper.xRot -= swing * 1.15F;
+                this.leftArmLower.xRot -= swing * 0.45F;
+                this.rightArmLower.xRot -= swing * 0.45F;
+            }
+        }
+
+        @Override
+        public void renderToBuffer(PoseStack poseStack, VertexConsumer buffer, int packedLight,
+                                   int packedOverlay, float red, float green, float blue, float alpha) {
+            super.renderToBuffer(poseStack, buffer, packedLight, packedOverlay, 0.0F, 0.0F, 0.0F, 1.0F);
         }
     }
 
     @OnlyIn(Dist.CLIENT)
     public static class WhispererRenderer extends MobRenderer<WhispererEntity, WhispererModel> {
-        private static ResourceLocation PROCEDURAL_BASE_TEX;
-        private static ResourceLocation PROCEDURAL_EYES_TEX;
+        private static ResourceLocation PITCH_BLACK_TEX;
 
         public WhispererRenderer(EntityRendererProvider.Context context) {
             super(context, new WhispererModel(context.bakeLayer(ClientSetup.WHISPERER_LAYER)), 0.5F);
-            ensureProceduralTextures();
-            this.addLayer(new WhispererEyesLayer(this));
+            ensurePitchBlackTexture();
         }
 
-        static void ensureProceduralTextures() {
-            if (PROCEDURAL_BASE_TEX != null) return;
-            NativeImage baseImg = new NativeImage(128, 128, false);
-            NativeImage eyesImg = new NativeImage(128, 128, true);
+        private static void ensurePitchBlackTexture() {
+            if (PITCH_BLACK_TEX != null) return;
+            NativeImage blackImg = new NativeImage(128, 128, false);
             for (int y = 0; y < 128; y++) {
                 for (int x = 0; x < 128; x++) {
-                    int v = 14 + ((x * 37 + y * 53) & 15);
-                    int abgr = (255 << 24) | ((v + 4) << 16) | (v << 8) | v;
-                    baseImg.setPixelRGBA(x, y, abgr);
-                    if (y >= 11 && y <= 13 && ((x >= 10 && x <= 12) || (x >= 18 && x <= 20))) {
-                        eyesImg.setPixelRGBA(x, y, (230 << 24) | (200 << 16) | (210 << 8) | 255);
-                    } else {
-                        eyesImg.setPixelRGBA(x, y, 0);
-                    }
+                    blackImg.setPixelRGBA(x, y, 0xFF000000);
                 }
             }
-            PROCEDURAL_BASE_TEX = Minecraft.getInstance().getTextureManager()
-                    .register("whisperer_base", new DynamicTexture(baseImg));
-            PROCEDURAL_EYES_TEX = Minecraft.getInstance().getTextureManager()
-                    .register("whisperer_eyes", new DynamicTexture(eyesImg));
+            PITCH_BLACK_TEX = Minecraft.getInstance().getTextureManager()
+                    .register("whisperer_pitch_black", new DynamicTexture(blackImg));
         }
 
         @Override
         public ResourceLocation getTextureLocation(WhispererEntity entity) {
-            ensureProceduralTextures();
-            return PROCEDURAL_BASE_TEX;
-        }
-    }
-
-    @OnlyIn(Dist.CLIENT)
-    public static class WhispererEyesLayer extends RenderLayer<WhispererEntity, WhispererModel> {
-        public WhispererEyesLayer(RenderLayerParent<WhispererEntity, WhispererModel> parent) {
-            super(parent);
-        }
-
-        @Override
-        public void render(PoseStack poseStack, MultiBufferSource buffer, int packedLight,
-                           WhispererEntity entity, float limbSwing, float limbSwingAmount,
-                           float partialTicks, float ageInTicks, float netHeadYaw, float headPitch) {
-            WhispererRenderer.ensureProceduralTextures();
-            VertexConsumer vc = buffer.getBuffer(RenderType.eyes(WhispererRenderer.PROCEDURAL_EYES_TEX));
-            this.getParentModel().renderToBuffer(poseStack, vc, 15728880,
-                    OverlayTexture.NO_OVERLAY, 1.0F, 1.0F, 1.0F, 1.0F);
+            ensurePitchBlackTexture();
+            return PITCH_BLACK_TEX;
         }
     }
 }
