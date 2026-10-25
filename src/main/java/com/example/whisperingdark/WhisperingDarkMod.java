@@ -79,6 +79,7 @@ import net.minecraftforge.registries.DeferredRegister;
 import net.minecraftforge.registries.ForgeRegistries;
 import net.minecraftforge.registries.RegistryObject;
 
+import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.UUID;
@@ -86,6 +87,8 @@ import java.util.UUID;
 @Mod(WhisperingDarkMod.MODID)
 public class WhisperingDarkMod {
     public static final String MODID = "whisperingdark";
+
+    private static long nextAllowedSpawnGameTime = -1L;
 
     public static final DeferredRegister<EntityType<?>> ENTITIES =
             DeferredRegister.create(ForgeRegistries.ENTITY_TYPES, MODID);
@@ -151,17 +154,31 @@ public class WhisperingDarkMod {
         );
     }
 
+    public static void scheduleNextSpawnCooldown(Level level) {
+        nextAllowedSpawnGameTime = level.getGameTime() + 72000L + level.random.nextInt(24001);
+    }
+
+    public static boolean hasAnyWhispererInWorld(ServerLevel serverLevel, WhispererEntity exclude) {
+        for (Entity entity : serverLevel.getAllEntities()) {
+            if (entity instanceof WhispererEntity w && w != exclude && w.isAlive()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @SubscribeEvent
     public void onLivingDeath(LivingDeathEvent event) {
         if (event.getEntity().level().isClientSide) return;
-        if (event.getEntity() instanceof Player deadPlayer) {
-            Level level = deadPlayer.level();
-            List<WhispererEntity> whisperers = level.getEntitiesOfClass(
-                    WhispererEntity.class, deadPlayer.getBoundingBox().inflate(128.0D));
-            for (WhispererEntity w : whisperers) {
-                if (w.isHuntingPlayer(deadPlayer)) {
-                    w.vanishWithSound();
+        if (event.getEntity() instanceof Player deadPlayer && deadPlayer.level() instanceof ServerLevel serverLevel) {
+            List<WhispererEntity> toVanish = new ArrayList<>();
+            for (Entity entity : serverLevel.getAllEntities()) {
+                if (entity instanceof WhispererEntity w && w.isAlive() && w.isHuntingPlayer(deadPlayer)) {
+                    toVanish.add(w);
                 }
+            }
+            for (WhispererEntity w : toVanish) {
+                w.vanishWithSound();
             }
         }
     }
@@ -169,39 +186,48 @@ public class WhisperingDarkMod {
     @SubscribeEvent
     public void onPlayerTick(TickEvent.PlayerTickEvent event) {
         if (event.phase != TickEvent.Phase.END || event.player.level().isClientSide) return;
-        if (event.player.tickCount % 180 != 0) return;
+        if (event.player.tickCount % 200 != 0) return;
 
         Player player = event.player;
         if (!player.isAlive() || player.isCreative() || player.isSpectator()) return;
-        Level level = player.level();
-        if (level.getSkyDarken() < 7 && !level.isThundering() && player.getY() > 52.0D) return;
+        if (!(player.level() instanceof ServerLevel serverLevel)) return;
 
-        BlockPos ppos = player.blockPosition();
-        if (level.getBrightness(LightLayer.BLOCK, ppos) > 2) return;
-
-        if (!level.getEntitiesOfClass(WhispererEntity.class, player.getBoundingBox().inflate(64.0D)).isEmpty()) {
+        long gameTime = serverLevel.getGameTime();
+        if (nextAllowedSpawnGameTime < 0L) {
+            scheduleNextSpawnCooldown(serverLevel);
+            return;
+        }
+        if (gameTime < nextAllowedSpawnGameTime) {
             return;
         }
 
-        if (level.random.nextFloat() < 0.22F) {
-            Vec3 look = player.getLookAngle();
-            double dist = 16.0D + level.random.nextDouble() * 12.0D;
-            double angle = (level.random.nextDouble() - 0.5D) * 1.4D;
-            double cos = Math.cos(angle);
-            double sin = Math.sin(angle);
-            double rx = look.x * cos - look.z * sin;
-            double rz = look.x * sin + look.z * cos;
+        if (hasAnyWhispererInWorld(serverLevel, null)) {
+            return;
+        }
 
-            BlockPos spawnPos = BlockPos.containing(player.getX() - rx * dist, player.getY(), player.getZ() - rz * dist);
-            BlockPos valid = findGround(level, spawnPos);
-            if (valid != null && level.getBrightness(LightLayer.BLOCK, valid) <= 2) {
-                WhispererEntity entity = WHISPERER.get().create(level);
-                if (entity != null) {
-                    entity.moveTo(valid.getX() + 0.5D, valid.getY(), valid.getZ() + 0.5D,
-                            level.random.nextFloat() * 360.0F, 0.0F);
-                    entity.lockHuntedPlayer(player);
-                    level.addFreshEntity(entity);
-                }
+        if (serverLevel.getSkyDarken() < 7 && !serverLevel.isThundering() && player.getY() > 52.0D) return;
+
+        BlockPos ppos = player.blockPosition();
+        if (serverLevel.getBrightness(LightLayer.BLOCK, ppos) > 3) return;
+
+        Vec3 look = player.getLookAngle();
+        double dist = 16.0D + serverLevel.random.nextDouble() * 16.0D;
+        double angle = (serverLevel.random.nextDouble() - 0.5D) * 1.5D;
+        double cos = Math.cos(angle);
+        double sin = Math.sin(angle);
+        double rx = look.x * cos - look.z * sin;
+        double rz = look.x * sin + look.z * cos;
+
+        BlockPos spawnPos = BlockPos.containing(player.getX() - rx * dist, player.getY(), player.getZ() - rz * dist);
+        BlockPos valid = findGround(serverLevel, spawnPos);
+        if (valid != null && serverLevel.getBrightness(LightLayer.BLOCK, valid) <= 3) {
+            WhispererEntity entity = WHISPERER.get().create(serverLevel);
+            if (entity != null) {
+                entity.moveTo(valid.getX() + 0.5D, valid.getY(), valid.getZ() + 0.5D,
+                        serverLevel.random.nextFloat() * 360.0F, 0.0F);
+                entity.lockHuntedPlayer(player);
+                serverLevel.addFreshEntity(entity);
+                scheduleNextSpawnCooldown(serverLevel);
             }
         }
     }
@@ -226,12 +252,13 @@ public class WhisperingDarkMod {
                 SynchedEntityData.defineId(WhispererEntity.class, EntityDataSerializers.BOOLEAN);
         private static final EntityDataAccessor<Boolean> CONVULSING =
                 SynchedEntityData.defineId(WhispererEntity.class, EntityDataSerializers.BOOLEAN);
+        private static final EntityDataAccessor<Integer> POSE_DIR =
+                SynchedEntityData.defineId(WhispererEntity.class, EntityDataSerializers.INT);
 
         private UUID huntedPlayerUUID = null;
         private int contortTicks = 0;
         private int convulseTicks = 0;
-        private boolean hasGrantedAttackGrace = false;
-        private boolean hasReactedToPlayerHit = false;
+        private boolean hasUsedHitFreeze = false;
         private int unseenStalkTicks = 0;
         private int orbitSwitchCooldown = 0;
         private int orbitDirection = 1;
@@ -251,6 +278,7 @@ public class WhisperingDarkMod {
             this.entityData.define(RAGING, false);
             this.entityData.define(CONTORTING, false);
             this.entityData.define(CONVULSING, false);
+            this.entityData.define(POSE_DIR, 1);
         }
 
         public static AttributeSupplier.Builder createAttributes() {
@@ -268,6 +296,8 @@ public class WhisperingDarkMod {
         public void setContorting(boolean v) { this.entityData.set(CONTORTING, v); }
         public boolean isConvulsing() { return this.entityData.get(CONVULSING); }
         public void setConvulsing(boolean v) { this.entityData.set(CONVULSING, v); }
+        public int getPoseDir() { return this.entityData.get(POSE_DIR); }
+        public void setPoseDir(int dir) { this.entityData.set(POSE_DIR, dir); }
         public int getOrbitDirection() { return this.orbitDirection; }
 
         public void lockHuntedPlayer(Player player) {
@@ -290,7 +320,6 @@ public class WhisperingDarkMod {
 
         @Override
         public void knockback(double strength, double x, double z) {
-            // 100% сопротивление отбрасыванию — не сдвигается ни на миллиметр
         }
 
         @Override
@@ -316,21 +345,17 @@ public class WhisperingDarkMod {
                 return super.hurt(source, amount);
             }
             if (!this.level().isClientSide) {
-                // Глухой металлический/костный удар, показывающий полную бесполезность оружия
-                this.level().playSound(null, this.blockPosition(),
-                        SoundEvents.BONE_BLOCK_HIT, SoundSource.HOSTILE, 1.0F, 0.5F);
-                this.level().playSound(null, this.blockPosition(),
-                        SoundEvents.ANVIL_PLACE, SoundSource.HOSTILE, 0.35F, 0.5F);
+                this.playBoneCrunchSound(1.25F);
 
                 if (source.getEntity() instanceof Player player && !player.isCreative() && !player.isSpectator()) {
                     if (this.huntedPlayerUUID == null) {
                         this.lockHuntedPlayer(player);
                     }
-                    if (!this.isRaging() && !this.isContorting()) {
-                        this.startFiveSecondContortion(player);
-                    } else if (this.isRaging() && !this.hasReactedToPlayerHit && !this.isConvulsing()) {
-                        this.hasReactedToPlayerHit = true;
-                        this.startPostAttackConvulsion(32);
+                    if (!this.hasUsedHitFreeze && !this.isContorting() && !this.isConvulsing()) {
+                        this.hasUsedHitFreeze = true;
+                        this.startPostAttackConvulsion(35, player);
+                    } else if (!this.isRaging() && !this.isContorting() && !this.isConvulsing()) {
+                        this.triggerRage(player);
                     }
                 }
             }
@@ -348,11 +373,9 @@ public class WhisperingDarkMod {
                     this.vanishWithSound();
                     return true;
                 }
-                // Первый успешный удар по игроку вызывает остановку на 1-2 секунды с хрустом и судорогами;
-                // на все последующие удары монстр больше не останавливается
-                if (!this.hasGrantedAttackGrace) {
-                    this.hasGrantedAttackGrace = true;
-                    this.startPostAttackConvulsion(35);
+                if (!this.hasUsedHitFreeze) {
+                    this.hasUsedHitFreeze = true;
+                    this.startPostAttackConvulsion(35, player);
                 }
             }
             return hit;
@@ -360,30 +383,32 @@ public class WhisperingDarkMod {
 
         private void startFiveSecondContortion(Player player) {
             this.lockHuntedPlayer(player);
+            this.setPoseDir(this.random.nextBoolean() ? 1 : -1);
             this.setContorting(true);
-            this.contortTicks = 100; // Ровно 5 секунд (100 тиков)
+            this.contortTicks = 100;
             this.getNavigation().stop();
             this.setDeltaMovement(0.0D, this.getDeltaMovement().y, 0.0D);
             this.playBoneCrunchSound(1.5F);
-            this.level().playSound(null, player.blockPosition(),
-                    SoundEvents.SCULK_SHRIEKER_SHRIEK, SoundSource.HOSTILE, 0.65F, 0.5F);
         }
 
-        private void startPostAttackConvulsion(int ticks) {
+        private void startPostAttackConvulsion(int ticks, Player player) {
+            this.setPoseDir(this.random.nextBoolean() ? 1 : -1);
             this.setConvulsing(true);
-            this.convulseTicks = ticks; // 32-35 тиков (~1.6 - 1.75 секунды форы)
+            this.convulseTicks = ticks;
             this.getNavigation().stop();
             this.setDeltaMovement(0.0D, this.getDeltaMovement().y, 0.0D);
-            this.playBoneCrunchSound(1.4F);
+            this.playBoneCrunchSound(1.45F);
         }
 
         public void playBoneCrunchSound(float volume) {
             this.level().playSound(null, this.blockPosition(),
-                    SoundEvents.BONE_BLOCK_BREAK, SoundSource.HOSTILE, volume, 0.52F + this.random.nextFloat() * 0.18F);
+                    SoundEvents.BONE_BLOCK_BREAK, SoundSource.HOSTILE, volume, 0.52F + this.random.nextFloat() * 0.15F);
             this.level().playSound(null, this.blockPosition(),
-                    SoundEvents.SKELETON_CONVERTED_TO_STRAY, SoundSource.HOSTILE, volume * 0.85F, 0.55F + this.random.nextFloat() * 0.2F);
+                    SoundEvents.BONE_BLOCK_HIT, SoundSource.HOSTILE, volume * 0.95F, 0.50F + this.random.nextFloat() * 0.15F);
             this.level().playSound(null, this.blockPosition(),
-                    SoundEvents.WARDEN_TENDRIL_CLICKS, SoundSource.HOSTILE, volume * 0.9F, 0.5F + this.random.nextFloat() * 0.2F);
+                    SoundEvents.TURTLE_EGG_CRACK, SoundSource.HOSTILE, volume * 0.85F, 0.50F + this.random.nextFloat() * 0.12F);
+            this.level().playSound(null, this.blockPosition(),
+                    SoundEvents.SKELETON_STEP, SoundSource.HOSTILE, volume * 0.90F, 0.50F);
         }
 
         @Override
@@ -403,7 +428,7 @@ public class WhisperingDarkMod {
             super.tick();
 
             if (this.level().isClientSide) {
-                float particleChance = (this.isRaging() || this.isContorting() || this.isConvulsing()) ? 0.6F : 0.2F;
+                float particleChance = (this.isRaging() || this.isContorting() || this.isConvulsing()) ? 0.45F : 0.15F;
                 if (this.random.nextFloat() < particleChance) {
                     double rx = this.getX() + (this.random.nextDouble() - 0.5D) * 0.7D;
                     double ry = this.getY() + this.random.nextDouble() * 2.7D;
@@ -413,10 +438,21 @@ public class WhisperingDarkMod {
                 return;
             }
 
+            if (this.tickCount == 1 && this.level() instanceof ServerLevel serverLevel) {
+                List<WhispererEntity> others = new ArrayList<>();
+                for (Entity e : serverLevel.getAllEntities()) {
+                    if (e instanceof WhispererEntity w && w != this && w.isAlive()) {
+                        others.add(w);
+                    }
+                }
+                for (WhispererEntity old : others) {
+                    old.discard();
+                }
+            }
+
             if (this.shadowStepCooldown > 0) this.shadowStepCooldown--;
             if (this.orbitSwitchCooldown > 0) this.orbitSwitchCooldown--;
 
-            // Проверка преследуемого игрока: если он умер от любой причины или убежал достаточно далеко (> 64 блоков) — монстр исчезает
             Player player = null;
             if (this.huntedPlayerUUID != null) {
                 player = this.level().getPlayerByUUID(this.huntedPlayerUUID);
@@ -437,7 +473,7 @@ public class WhisperingDarkMod {
                     }
                 }
                 if (player == null) {
-                    Player nearest = this.level().getNearestPlayer(this, 48.0D);
+                    Player nearest = this.level().getNearestPlayer(this, 32.0D);
                     if (nearest != null && nearest.isAlive() && !nearest.isCreative() && !nearest.isSpectator()) {
                         this.lockHuntedPlayer(nearest);
                         player = nearest;
@@ -453,48 +489,41 @@ public class WhisperingDarkMod {
 
             double dist = this.distanceTo(player);
             if (dist > 64.0D) {
-                // Игрок сумел оторваться на большое расстояние — монстр исчезает
                 this.vanishWithSound();
                 return;
             }
 
-            // Давящее звуковое окружение рядом с игроком: низкий эмбиент, шорохи, скрежет и сердцебиение
             int hbInterval = Mth.clamp((int) (dist * 1.5D), 12, 42);
             if (dist < 32.0D && this.tickCount % hbInterval == 0) {
                 float vol = (float) Mth.clamp(1.25D - (dist / 34.0D), 0.25D, 1.0D);
                 this.level().playSound(null, player.blockPosition(),
                         SoundEvents.WARDEN_HEARTBEAT, SoundSource.HOSTILE, vol, 0.52F);
             }
-            if (dist < 26.0D && this.tickCount % 55 == 0) {
+            if (dist < 26.0D && this.tickCount % 60 == 0) {
                 this.level().playSound(null, this.blockPosition(),
-                        SoundEvents.WARDEN_AMBIENT, SoundSource.AMBIENT, 0.75F, 0.5F);
+                        SoundEvents.WARDEN_AMBIENT, SoundSource.AMBIENT, 0.70F, 0.5F);
                 this.level().playSound(null, this.blockPosition(),
-                        SoundEvents.SCULK_CATALYST_BLOOM, SoundSource.AMBIENT, 0.85F, 0.5F);
+                        SoundEvents.SCULK_CATALYST_BLOOM, SoundSource.AMBIENT, 0.80F, 0.5F);
             }
 
-            // 1. Обработка послеударных судорог (1-2 секунды форы)
             if (this.isConvulsing()) {
                 this.getNavigation().stop();
                 this.setDeltaMovement(0.0D, this.getDeltaMovement().y, 0.0D);
                 this.getLookControl().setLookAt(player, 45.0F, 45.0F);
-                if (this.convulseTicks % 8 == 0) {
-                    this.playBoneCrunchSound(1.15F);
-                }
                 if (--this.convulseTicks <= 0) {
                     this.setConvulsing(false);
+                    if (!this.isRaging()) {
+                        this.triggerRage(player);
+                    }
                 }
                 return;
             }
 
-            // 2. Обработка 5-секундной фазы выкручивания суставов при взгляде игрока
             if (this.isContorting()) {
                 this.getNavigation().stop();
                 this.setDeltaMovement(0.0D, this.getDeltaMovement().y, 0.0D);
                 this.getLookControl().setLookAt(player, 45.0F, 45.0F);
 
-                if (this.contortTicks % 16 == 0) {
-                    this.playBoneCrunchSound(1.3F);
-                }
                 if (this.contortTicks == 50) {
                     player.addEffect(new MobEffectInstance(MobEffects.DARKNESS, 70, 0, false, false));
                 }
@@ -506,13 +535,12 @@ public class WhisperingDarkMod {
                 return;
             }
 
-            // 3. Фаза стремительной погони (на 10-15% быстрее спринта игрока)
             if (this.isRaging()) {
                 if (this.tickCount % 6 == 0 && this.getDeltaMovement().horizontalDistanceSqr() > 0.002D) {
                     this.level().playSound(null, this.blockPosition(),
                             SoundEvents.WARDEN_STEP, SoundSource.HOSTILE, 0.95F, 0.65F + this.random.nextFloat() * 0.25F);
                     this.level().playSound(null, this.blockPosition(),
-                            SoundEvents.BONE_BLOCK_BREAK, SoundSource.HOSTILE, 0.65F, 0.55F + this.random.nextFloat() * 0.35F);
+                            SoundEvents.BONE_BLOCK_BREAK, SoundSource.HOSTILE, 0.55F, 0.55F + this.random.nextFloat() * 0.25F);
                 }
 
                 if (dist < 15.0D && this.tickCount % 60 == 0) {
@@ -525,18 +553,14 @@ public class WhisperingDarkMod {
                 return;
             }
 
-            // 4. Фаза скрытного преследования до прямого взгляда игрока
-            boolean playerLookingDirectly = isPlayerLookingAtMe(player, 0.80D);
-            boolean inPeripheral = !playerLookingDirectly && isPlayerLookingAtMe(player, 0.25D);
-
-            if (playerLookingDirectly) {
+            if (isPlayerLookingAtMe(player, 0.30D)) {
                 this.startFiveSecondContortion(player);
                 return;
             }
 
             this.unseenStalkTicks++;
 
-            if (this.orbitSwitchCooldown == 0 && (inPeripheral || this.random.nextFloat() < 0.02F)) {
+            if (this.orbitSwitchCooldown == 0 && this.random.nextFloat() < 0.025F) {
                 this.orbitDirection = -this.orbitDirection;
                 this.orbitSwitchCooldown = 60 + this.random.nextInt(60);
             }
@@ -552,8 +576,8 @@ public class WhisperingDarkMod {
                         SoundEvents.BONE_BLOCK_STEP, SoundSource.AMBIENT, 0.85F, 0.52F + this.random.nextFloat() * 0.2F);
             }
 
-            if (dist > 28.0D && dist <= 60.0D && this.shadowStepCooldown == 0 && this.unseenStalkTicks > 80) {
-                tryShadowStepBehind(player, 15.0D);
+            if (dist > 26.0D && dist <= 32.0D && this.shadowStepCooldown == 0 && this.unseenStalkTicks > 80) {
+                tryShadowStepBehind(player, 16.0D);
             }
         }
 
@@ -603,7 +627,6 @@ public class WhisperingDarkMod {
             this.setContorting(false);
             this.setConvulsing(false);
 
-            // Скорость в погоне на 12-15% быстрее спринта игрока (база 0.345 * множитель 1.32 в ChaseGoal)
             AttributeInstance speedAttr = this.getAttribute(Attributes.MOVEMENT_SPEED);
             if (speedAttr != null) {
                 speedAttr.setBaseValue(0.345D);
@@ -622,6 +645,9 @@ public class WhisperingDarkMod {
         }
 
         public void vanishWithSound() {
+            if (!this.level().isClientSide) {
+                scheduleNextSpawnCooldown(this.level());
+            }
             this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
                     WHISPER_DISAPPEAR.get(), SoundSource.HOSTILE, 1.0F, 0.65F);
             if (this.level() instanceof ServerLevel sl) {
@@ -638,7 +664,7 @@ public class WhisperingDarkMod {
 
         @Override
         protected SoundEvent getHurtSound(DamageSource ds) {
-            return SoundEvents.BONE_BLOCK_HIT;
+            return SoundEvents.BONE_BLOCK_BREAK;
         }
 
         @Override
@@ -648,8 +674,7 @@ public class WhisperingDarkMod {
 
         public static boolean checkWhispererSpawnRules(EntityType<WhispererEntity> type, ServerLevelAccessor level,
                                                       MobSpawnType spawnType, BlockPos pos, RandomSource random) {
-            if (level.getBrightness(LightLayer.BLOCK, pos) > 2) return false;
-            return Monster.checkMonsterSpawnRules(type, level, spawnType, pos, random);
+            return spawnType == MobSpawnType.SPAWN_EGG || spawnType == MobSpawnType.COMMAND;
         }
     }
 
@@ -856,10 +881,6 @@ public class WhisperingDarkMod {
             float yawRad = netHeadYaw * ((float) Math.PI / 180.0F);
             float pitchRad = headPitch * ((float) Math.PI / 180.0F);
 
-            float breath = Mth.sin(ageInTicks * 0.08F);
-            this.abdomen.xRot += breath * 0.035F;
-            this.thorax.xRot += breath * 0.055F;
-
             this.neckLower.yRot += yawRad * 0.25F;
             this.neckUpper.yRot += yawRad * 0.35F;
             this.headHood.yRot += yawRad * 0.40F;
@@ -867,78 +888,37 @@ public class WhisperingDarkMod {
             this.neckLower.xRot += pitchRad * 0.30F;
             this.headHood.xRot += pitchRad * 0.70F;
 
-            float glitchPulse = Mth.sin(ageInTicks * 2.1F) * Mth.cos(ageInTicks * 4.7F);
+            if (entity.isContorting() || entity.isConvulsing()) {
+                float dir = (float) entity.getPoseDir();
 
-            // 1. Анимация послеударных судорог / корчей (1-2 секунды форы)
-            if (entity.isConvulsing()) {
-                float spasmFast = Mth.sin(ageInTicks * 3.8F);
-                float spasmJerk = Mth.cos(ageInTicks * 5.4F);
+                this.pelvis.y = -4.0F;
+                this.abdomen.xRot = 0.22F;
+                this.abdomen.zRot = 0.14F * dir;
 
-                this.pelvis.y = -3.2F + Mth.abs(spasmFast) * 0.9F;
-                this.pelvis.zRot = spasmJerk * 0.14F;
+                this.thorax.xRot = 0.34F;
+                this.thorax.zRot = -0.24F * dir;
 
-                this.abdomen.xRot = 0.55F + spasmFast * 0.22F;
-                this.abdomen.zRot = spasmJerk * 0.25F;
+                this.neckLower.xRot += 0.25F;
+                this.neckUpper.zRot += 0.38F * dir;
+                this.headHood.zRot += 0.82F * dir;
 
-                this.thorax.xRot = 0.65F - spasmFast * 0.28F;
-                this.thorax.yRot = spasmJerk * 0.32F;
-                this.thorax.zRot = -spasmFast * 0.26F;
+                this.leftArmUpper.xRot = -0.68F;
+                this.leftArmUpper.zRot = -0.32F;
+                this.leftArmLower.xRot = -0.88F;
 
-                this.neckLower.xRot = 0.45F + spasmJerk * 0.35F;
-                this.neckUpper.zRot = spasmFast * 0.75F;
-                this.headHood.xRot = -0.55F + spasmFast * 0.45F;
-                this.headHood.zRot = -spasmJerk * 0.85F;
+                this.rightArmUpper.xRot = -0.42F;
+                this.rightArmUpper.zRot = 0.28F;
+                this.rightArmLower.xRot = -0.62F;
 
-                this.leftArmUpper.xRot = -0.95F + spasmFast * 0.55F;
-                this.rightArmUpper.xRot = -0.95F - spasmFast * 0.55F;
-                this.leftArmUpper.zRot = -0.45F + spasmJerk * 0.30F;
-                this.rightArmUpper.zRot = 0.45F - spasmJerk * 0.30F;
-
-                this.leftArmLower.xRot = -1.25F + spasmJerk * 0.50F;
-                this.rightArmLower.xRot = -1.25F - spasmJerk * 0.50F;
-
-                this.leftLegUpper.xRot = -0.15F + spasmFast * 0.12F;
-                this.rightLegUpper.xRot = 0.15F - spasmFast * 0.12F;
+                this.leftLegUpper.xRot = 0.0F;
+                this.rightLegUpper.xRot = 0.0F;
                 return;
             }
 
-            // 2. Уникальная 5-секундная анимация выкручивания суставов и деформации при взгляде игрока
-            if (entity.isContorting()) {
-                float steppedTime = (float) Math.floor(ageInTicks * 0.55F) / 0.55F;
-                float snapWave = Mth.sin(steppedTime * 0.42F);
-                float violentTremor = Mth.sin(ageInTicks * 3.4F) * Mth.cos(ageInTicks * 6.1F);
+            float breath = Mth.sin(ageInTicks * 0.08F);
+            this.abdomen.xRot += breath * 0.035F;
+            this.thorax.xRot += breath * 0.055F;
 
-                this.pelvis.y = -3.5F + Mth.sin(ageInTicks * 0.35F) * 0.6F;
-                this.pelvis.zRot = snapWave * 0.12F;
-
-                // Нечеловеческий излом позвоночника назад и вбок
-                this.abdomen.xRot = -0.28F + Mth.sin(ageInTicks * 0.25F) * 0.32F;
-                this.abdomen.zRot = snapWave * 0.35F + violentTremor * 0.08F;
-
-                this.thorax.xRot = 0.48F + Mth.cos(ageInTicks * 0.30F) * 0.35F;
-                this.thorax.yRot = snapWave * 0.40F;
-                this.thorax.zRot = -snapWave * 0.42F + violentTremor * 0.12F;
-
-                // Выкручивание шеи и головы почти на 90 градусов с резкими рывками
-                this.neckLower.zRot = snapWave * 0.45F;
-                this.neckUpper.zRot = snapWave * 0.65F + violentTremor * 0.20F;
-                this.headHood.zRot = (snapWave > 0 ? 1.15F : -1.15F) + violentTremor * 0.28F;
-                this.headHood.xRot += -0.35F + violentTremor * 0.22F;
-
-                // Вывернутые плечевые и локтевые суставы
-                this.leftArmUpper.xRot = -1.65F + Mth.sin(steppedTime * 0.5F) * 0.75F + violentTremor * 0.20F;
-                this.rightArmUpper.xRot = -1.45F - Mth.sin(steppedTime * 0.5F) * 0.75F - violentTremor * 0.20F;
-                this.leftArmUpper.zRot = -0.68F - snapWave * 0.35F;
-                this.rightArmUpper.zRot = 0.68F - snapWave * 0.35F;
-
-                this.leftArmLower.xRot = -1.10F + Mth.cos(ageInTicks * 0.6F) * 0.65F;
-                this.rightArmLower.xRot = -1.10F - Mth.cos(ageInTicks * 0.6F) * 0.65F;
-                this.leftArmLower.zRot = 0.45F + violentTremor * 0.25F;
-                this.rightArmLower.zRot = -0.45F - violentTremor * 0.25F;
-                return;
-            }
-
-            // 3. Анимация стремительной погони (Raging)
             if (entity.isRaging()) {
                 float runCycle = limbSwing * 0.78F;
                 float runStride = Math.max(Mth.clamp(limbSwingAmount * 1.3F, 0.0F, 1.0F), 0.60F);
@@ -953,8 +933,7 @@ public class WhisperingDarkMod {
 
                 this.neckLower.xRot += 0.32F;
                 this.neckUpper.xRot += -0.44F;
-                this.headHood.zRot += Mth.sin(ageInTicks * 1.9F) * 0.30F + glitchPulse * 0.20F;
-                this.headHood.yRot += glitchPulse * 0.15F;
+                this.headHood.zRot += Mth.sin(runCycle) * 0.12F;
 
                 this.leftLegUpper.xRot = Mth.cos(runCycle) * 1.38F * runStride;
                 this.rightLegUpper.xRot = Mth.cos(runCycle + (float) Math.PI) * 1.38F * runStride;
@@ -967,7 +946,6 @@ public class WhisperingDarkMod {
                 this.leftArmLower.xRot = -0.65F + Mth.sin(runCycle + (float) Math.PI) * 0.45F * runStride;
                 this.rightArmLower.xRot = -0.65F + Mth.sin(runCycle) * 0.45F * runStride;
             } else {
-                // 4. Анимация крадущегося преследования (Stalking Walk)
                 float walkCycle = limbSwing * 0.6662F;
                 float stride = Mth.clamp(limbSwingAmount * 1.15F, 0.0F, 1.0F);
 
@@ -979,9 +957,9 @@ public class WhisperingDarkMod {
                 this.thorax.xRot += 0.14F + 0.16F * stride;
                 this.thorax.zRot += Mth.cos(walkCycle) * 0.05F * stride;
 
-                float eerieHeadTilt = Mth.sin(ageInTicks * 0.045F) * 0.26F;
+                float eerieHeadTilt = Mth.sin(ageInTicks * 0.045F) * 0.22F;
                 this.neckUpper.zRot += eerieHeadTilt * 0.5F;
-                this.headHood.zRot += eerieHeadTilt + (glitchPulse > 0.72F ? 0.28F : 0.0F);
+                this.headHood.zRot += eerieHeadTilt;
 
                 this.leftLegUpper.xRot = Mth.cos(walkCycle) * 0.88F * stride;
                 this.rightLegUpper.xRot = Mth.cos(walkCycle + (float) Math.PI) * 0.88F * stride;
