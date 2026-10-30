@@ -415,7 +415,7 @@ public class WhisperingDarkMod {
 
         public void playLowAgonyGroan(float volume) {
             this.level().playSound(null, this.getX(), this.getY() + 1.5D, this.getZ(),
-                    SoundEvents.GHAST_MOAN, SoundSource.HOSTILE, volume * 1.4F, 0.50F + this.random.nextFloat() * 0.06F);
+                    SoundEvents.ENDERMAN_STARE, SoundSource.HOSTILE, volume * 1.4F, 0.50F + this.random.nextFloat() * 0.06F);
             this.level().playSound(null, this.getX(), this.getY() + 1.5D, this.getZ(),
                     SoundEvents.GHAST_SCREAM, SoundSource.HOSTILE, volume * 1.1F, 0.50F + this.random.nextFloat() * 0.05F);
             this.level().playSound(null, this.getX(), this.getY() + 1.5D, this.getZ(),
